@@ -45,7 +45,6 @@ Vector / Keyword Storage
 - 保留代码块完整性
 - 支持 Hybrid Retrieval
 - 支持未来增量更新
-- 支持多租户
 - 支持多知识库
 
 ## 2. Ingestion 总体架构
@@ -481,7 +480,6 @@ version
 PostgreSQL：
 
 ```text
-Tenant
 KnowledgeBase
 Document
 Section
@@ -736,7 +734,6 @@ Reindex Document
 
 ```text
 Reindex KnowledgeBase
-Reindex Tenant
 ```
 
 Embedding Model 变化：

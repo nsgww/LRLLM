@@ -25,10 +25,9 @@ repo/
 │   │   ├── config.py              # Settings / 环境变量
 │   │   ├── errors.py              # Error Classification（02 第 21 节 / 04 第 32 节）
 │   │   ├── logging.py
-│   │   ├── versions.py            # PARSER_VERSION / CHUNKER_VERSION 等常量
-│   │   └── tenant.py              # Tenant Context（Header 解析结果）
+│   │   └── versions.py            # PARSER_VERSION / CHUNKER_VERSION 等常量
 │   ├── api/
-│   │   ├── deps.py                # X-Tenant-ID / X-Knowledge-Base-ID 解析与归属校验
+│   │   ├── deps.py                # X-Knowledge-Base-ID 作用域解析
 │   │   ├── routers/
 │   │   │   ├── knowledge_bases.py
 │   │   │   ├── documents.py
@@ -79,7 +78,7 @@ repo/
 │   │   ├── interface.py
 │   │   └── providers/
 │   ├── storage/
-│   │   ├── postgres/              # Repository（Tenant / KB / Document / Chunk / Job / Trace / Prompt）
+│   │   ├── postgres/              # Repository（KB / Document / Chunk / Job / Trace / Prompt）
 │   │   ├── qdrant/                # VectorStore 实现
 │   │   └── keyword/               # KeywordStore 实现（PG FTS + pg_trgm）
 │   ├── tracing/
@@ -133,7 +132,7 @@ domain  ←  ingestion / retrieval / llm / embedding / reranker / tracing
 |---|---|
 | Error Classification 常量 | `app/core/errors.py` |
 | Parser / Chunker / Embedding 版本号 | `app/core/versions.py` |
-| 租户 Header 解析 | `app/api/deps.py` |
+| 知识库作用域解析 | `app/api/deps.py` |
 | Metadata Filter 构建 | `app/retrieval/filters.py` |
 | RRF 融合参数 | `app/core/config.py`（配置项，非硬编码） |
 | Prompt Seed 模板 | `app/llm/prompts/seed/` |
@@ -157,13 +156,13 @@ domain  ←  ingestion / retrieval / llm / embedding / reranker / tracing
 
 ```text
 unit          Parser / Chunker / Fusion / Filter / Prompt Parsing 等纯逻辑
-integration   PostgreSQL / Qdrant / FTS 真实存储行为（含租户隔离用例）
+integration   PostgreSQL / Qdrant / FTS 真实存储行为（含跨知识库隔离用例）
 eval          Eval Dataset 与 Fixture（见 07，v0.1 人工执行，脚本只算 Retrieval 指标）
 ```
 
 必须存在的测试用例：
 
-- 跨租户 Retrieval 隔离（Storage 层过滤）
+- 跨知识库 Retrieval 隔离（Storage 层过滤）
 - 指定 Version 时零跨版本召回
 - Soft Delete 后 Document 立即不可检索
 - 结构化 Prompt 输出的校验 / 重试 / fallback
@@ -178,5 +177,5 @@ eval          Eval Dataset 与 Fixture（见 07，v0.1 人工执行，脚本只�
 6. Error Classification 必须有统一定义位置，不得散落各模块。
 7. Prompt Seed 只是初始版本，运行时以数据库为准。
 8. `embedding_dimension` 与 Qdrant Collection 不一致时启动必须失败。
-9. 租户隔离、Version 过滤、Soft Delete 生效必须有自动化测试覆盖。
+9. 知识库作用域、Version 过滤、Soft Delete 生效必须有自动化测试覆盖。
 10. v0.1 不实现的目录（`tools`、自动化 Evaluation Runner）只放接口与注释，不放半成品逻辑。

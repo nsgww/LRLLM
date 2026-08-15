@@ -13,7 +13,8 @@ description: 私有知识库 RAG PostgreSQL DDL 与 Qdrant Collection 定义
 - Qdrant 只保存 Vector + Retrieval Metadata，可通过对 Chunk 重新 Embedding 完整重建。
 - Chunk 表不存向量本体，只记录 `embedding_model / embedding_model_version`。
 - 删除采用 Soft Delete（`deleted_at`），物理清理由后台任务执行。
-- `tenant_id` 在 Document / Section / Chunk / Job / Trace 上冗余存储，保证任意查询都能强制租户过滤。
+- `knowledge_base_id` 在 Document / Section / Chunk / Job / Trace 上冗余存储，保证任意查询都能强制作用域过滤。
+- v0.1 为单一共享知识空间，不设租户表；未来如需多租户，`tenant_id` 作为新列加入各表与 Qdrant Payload，现有结构不需要重构。
 
 ## 2. 扩展
 
@@ -53,16 +54,8 @@ CREATE TYPE message_role AS ENUM (
 ## 4. DDL
 
 ```sql
-CREATE TABLE tenants (
-    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name        TEXT NOT NULL UNIQUE,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
 CREATE TABLE knowledge_bases (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id   UUID NOT NULL REFERENCES tenants(id),
     name        TEXT NOT NULL,
     description TEXT,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -70,13 +63,12 @@ CREATE TABLE knowledge_bases (
     deleted_at  TIMESTAMPTZ
 );
 
-CREATE UNIQUE INDEX uq_kb_tenant_name
-    ON knowledge_bases (tenant_id, name)
+CREATE UNIQUE INDEX uq_kb_name
+    ON knowledge_bases (name)
     WHERE deleted_at IS NULL;
 
 CREATE TABLE documents (
     id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id              UUID NOT NULL REFERENCES tenants(id),
     knowledge_base_id      UUID NOT NULL REFERENCES knowledge_bases(id),
     title                  TEXT NOT NULL,
     doc_class              TEXT,
@@ -113,7 +105,6 @@ CREATE INDEX idx_documents_product_version
 
 CREATE TABLE sections (
     id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id         UUID NOT NULL,
     document_id       UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
     parent_section_id UUID REFERENCES sections(id),
     heading           TEXT NOT NULL,
@@ -128,7 +119,6 @@ CREATE INDEX idx_sections_document ON sections (document_id, section_order);
 
 CREATE TABLE chunks (
     id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id              UUID NOT NULL,
     knowledge_base_id      UUID NOT NULL,
     document_id            UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
     section_id             UUID REFERENCES sections(id),
@@ -153,7 +143,7 @@ CREATE TABLE chunks (
 CREATE INDEX idx_chunks_document ON chunks (document_id, chunk_index)
     WHERE deleted_at IS NULL;
 
-CREATE INDEX idx_chunks_tenant_kb ON chunks (tenant_id, knowledge_base_id)
+CREATE INDEX idx_chunks_kb ON chunks (knowledge_base_id)
     WHERE deleted_at IS NULL;
 
 CREATE INDEX idx_chunks_product_version ON chunks (knowledge_base_id, product, version)
@@ -199,7 +189,6 @@ CREATE TRIGGER trg_chunks_search_tsv
 ```sql
 CREATE TABLE ingestion_jobs (
     id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id         UUID NOT NULL,
     knowledge_base_id UUID NOT NULL,
     document_id       UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
     status            job_status NOT NULL DEFAULT 'PENDING',
@@ -228,7 +217,6 @@ CREATE INDEX idx_jobs_status ON ingestion_jobs (status)
 ```sql
 CREATE TABLE conversations (
     id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id         UUID NOT NULL,
     knowledge_base_id UUID NOT NULL,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -253,7 +241,6 @@ Retrieval Trace 只进本表，不对公开 API 暴露（见 `05-api-spec.md` �
 ```sql
 CREATE TABLE query_traces (
     id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id            UUID NOT NULL,
     knowledge_base_id    UUID NOT NULL,
     conversation_id      UUID REFERENCES conversations(id),
     answer_id            UUID NOT NULL,
@@ -281,7 +268,7 @@ CREATE TABLE query_traces (
     created_at           TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_traces_tenant_time ON query_traces (tenant_id, created_at DESC);
+CREATE INDEX idx_traces_kb_time ON query_traces (knowledge_base_id, created_at DESC);
 
 CREATE INDEX idx_traces_answer ON query_traces (answer_id);
 ```
@@ -326,7 +313,6 @@ Payload 字段（每个 Point 必带）：
 
 ```json
 {
-  "tenant_id": "uuid",
   "knowledge_base_id": "uuid",
   "document_id": "uuid",
   "section_id": "uuid",
@@ -340,7 +326,6 @@ Payload 字段（每个 Point 必带）：
 必须为以下字段建立 Payload Index（keyword 类型），保证 filter 在存储层执行：
 
 ```text
-tenant_id
 knowledge_base_id
 document_id
 product
@@ -358,7 +343,6 @@ chunk_type
 
 ```text
 PostgreSQL                    Qdrant
-tenants
 knowledge_bases
 documents
 sections
@@ -375,7 +359,7 @@ prompt_templates
 ## 12. Non-Negotiable
 
 1. PostgreSQL 是唯一 Source of Truth，Qdrant 必须可重建。
-2. 所有业务表必须带 `tenant_id`，Chunks 同时冗余 `knowledge_base_id / product / version`。
+2. 所有知识数据表必须带 `knowledge_base_id`，Chunks 同时冗余 `product / version`。
 3. DDL 必须可直接执行，本文档即建库契约。
 4. Qdrant Payload 中的过滤字段必须建 Payload Index，filter 在存储层执行。
 5. 删除必须先 Soft Delete 立即可见生效，物理清理异步。
