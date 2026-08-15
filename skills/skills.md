@@ -17,7 +17,6 @@ description: 私有知识库 RAG 问答助手的架构与行为规范
 系统支持：
 
 - 私有知识库
-- 多租户
 - 多产品
 - 多版本
 - Hybrid Retrieval
@@ -113,15 +112,8 @@ Grounded Answer
 ## 4. Knowledge Model
 
 ```text
-Tenant
-Tenant
-├── id
-└── name
-
-KnowledgeBase
 KnowledgeBase
 ├── id
-├── tenant_id
 └── name
 
 Document
@@ -174,7 +166,6 @@ Chunk 必须知道自己的父 Document 和父 Section。
 | source | Front Matter → 文件路径 |
 | version | Front Matter / 显式上传信息 |
 | product | Front Matter / 系统 |
-| tenant_id | 系统 |
 | knowledge_base_id | 系统 |
 | document_id | 系统 |
 | created_at | 系统 |
@@ -314,20 +305,18 @@ Document 保存 `content_hash`。
 - Vector Index
 - Keyword Index
 
-## 10. Multi-Tenant Isolation
+## 10. 访问模型
+
+v0.1 为单一共享知识空间：
+
+- 知识由所有者自行上传与更新
+- 所有访问者看到相同的知识内容
 
 所有知识查询必须带：
 
-- tenant_id
 - knowledge_base_id
 
-租户隔离必须同时存在于：
-
-- Application Layer
-- Retrieval Layer
-- Storage Layer
-
-不能只依赖 Prompt 实现权限隔离。
+多租户不在 v0.1 范围内。未来如需引入，必须在 Application / Retrieval / Storage 三层同时加入隔离，不能只依赖 Prompt。
 
 ## 11. Query Understanding
 
@@ -490,7 +479,6 @@ Retrieval 前必须应用 Metadata Filter。
 
 默认至少包含：
 
-- tenant_id
 - knowledge_base_id
 
 如果识别出 Product：
@@ -935,7 +923,7 @@ Final Answer
 - Relevance 不等于 Evidence Sufficiency。
 - LLM 不得创造未被 Knowledge Base 支持的产品事实。
 - 不同 Version 的 Evidence 必须保持边界。
-- Tenant Isolation 不得只依赖 Prompt。
+- 查询必须显式限定 Knowledge Base 作用域。
 - Code Block 不得被普通 Chunker 任意拆分。
 - Context 必须受 Token Budget 限制。
 - 复杂 Query 必须支持 Query Decomposition。

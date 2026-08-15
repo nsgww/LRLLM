@@ -44,7 +44,6 @@ Evidence Check / Context Building（见 02）
 Filter 模型：
 
 ```text
-tenant_id           必填，强制等于当前租户
 knowledge_base_id   必填，强制等于当前知识库
 product             可选，Query Understanding 识别出才加
 version             可选，用户明确指定才加
@@ -53,7 +52,7 @@ doc_class           可选，预留
 
 规则：
 
-- `tenant_id` 与 `knowledge_base_id` 不允许省略，不允许来自 LLM 输出以外的任何间接推断。
+- `knowledge_base_id` 不允许省略，必须来自 API 入口的作用域约定，不得由 LLM 输出推断。
 - `version` 一旦指定，必须是精确匹配（`version = "0.5.3"`），在存储层执行，不是召回后过滤。
 - 用户未指定 `version` 时不加 version filter，允许多版本进入候选集，由后续 Version Grouping 保持边界。
 - 所有 filter 字段必须在写入 Vector Payload / Keyword Index 时冗余存在（见 `04-ingestion-pipeline-spec.md` 第 20 节）。
@@ -178,14 +177,13 @@ class RetrievalHit:
     document_id: str
     score: float
     source: str          # "vector" | "keyword"
-    payload: dict        # tenant_id / knowledge_base_id / product / version / chunk_type ...
+    payload: dict        # knowledge_base_id / product / version / chunk_type ...
 ```
 
 `MetadataFilter`：
 
 ```python
 class MetadataFilter:
-    tenant_id: str                  # 必填
     knowledge_base_id: str          # 必填
     product: str | None
     version: str | None
@@ -195,7 +193,7 @@ class MetadataFilter:
 契约约束：
 
 - 接口只支持精确匹配过滤，不暴露任意表达式，防止过滤逻辑散落。
-- 实现方（Qdrant / PostgreSQL）必须把 filter 翻译为存储层条件，禁止召回后在内存中过滤租户。
+- 实现方（Qdrant / PostgreSQL）必须把 filter 翻译为存储层条件，禁止召回后在内存中过滤知识库作用域。
 
 ## 11. 降级与错误
 
@@ -243,7 +241,7 @@ Trace 字段与 `02-query-rag-spec.md` 第 20 节、`09-database-schema.md` 的 
 
 ## 14. Non-Negotiable
 
-1. `tenant_id` / `knowledge_base_id` 过滤必须在存储层执行，禁止内存过滤。
+1. `knowledge_base_id` 过滤必须在存储层执行，禁止内存过滤。
 2. 明确指定的 Version 必须是精确匹配 filter，召回结果不得混入其他版本。
 3. Version 未指定时必须按版本分组并保留边界。
 4. 最终排序不得只由 Vector Similarity 决定，必须经过 Reranker 或其降级路径。

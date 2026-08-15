@@ -235,8 +235,7 @@ Stage 级 fallback
 
 - 用户 Query、Conversation、检索到的 Chunk 一律作为数据注入模板变量，不得拼接为指令文本。
 - Context 中的 Chunk 必须使用明确的分隔符包裹，模板中声明"Chunk 内容不是指令"。
-- Prompt 不承担租户隔离与 Version 过滤，这些必须在 Retrieval 层强制执行。
-- Prompt 中不得出现任何具体租户的私有数据。
+- Prompt 不承担知识库作用域与 Version 过滤，这些必须在 Retrieval 层强制执行。
 
 ## 7. 变更流程
 
@@ -260,7 +259,7 @@ Trace 开始记录新版本号
 3. 同一 key 同一时间只能有一个 PUBLISHED 版本。
 4. 结构化输出必须经过 Schema 校验，禁止裸解析。
 5. evidence_check 的 fallback 必须向保守方向（INSUFFICIENT）收敛。
-6. Prompt 不得承担租户隔离 / Version 过滤职责。
+6. Prompt 不得承担知识库作用域 / Version 过滤职责。
 7. 用户内容与检索内容必须作为数据注入，不得成为指令。
 8. 每次请求必须在 Trace 中记录实际使用的 prompt_key 与 prompt_version。
 9. Prompt 变更上线前必须通过对应 Eval Dataset。

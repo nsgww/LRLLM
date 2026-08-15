@@ -44,23 +44,22 @@ UUID
 X-Request-ID
 ```
 
-## 3. 身份与租户约定
+## 3. 访问约定
 
-v0.1 约定身份通过 Header 传递，但不做真实鉴权：
+v0.1 为单一共享知识空间：所有访问者看到相同的知识内容，知识由所有者自行上传更新，不做鉴权，不区分租户。
+
+知识库作用域通过 Header 传递：
 
 ```text
-X-Tenant-ID: <uuid>           （所有请求必带）
 X-Knowledge-Base-ID: <uuid>   （知识库级操作与 Query 必带）
 ```
 
 规则：
 
-- 服务端只信任 Header 中的租户身份，请求体中的 tenant 字段一律忽略。
-- 缺少必带 Header 返回 `400 TENANT_HEADER_MISSING`。
-- Header 中的 Knowledge Base 必须属于 Header 中的 Tenant，否则返回 `403 TENANT_SCOPE_VIOLATION`（v0.1 只做归属校验，不做身份认证）。
-- 未来接入真实鉴权（API Key / JWT）时，Tenant 从凭证解析，Header 契约保持兼容，接口签名不变。
-
-租户隔离的最终防线仍然在 Retrieval / Storage 层，Header 只是入口约定。
+- 缺少必带 Header 返回 `400 KB_HEADER_MISSING`。
+- Header 中的 Knowledge Base 不存在或已删除返回 `404 KNOWLEDGE_BASE_NOT_FOUND`。
+- 请求体中的知识库字段一律忽略，作用域只认 Header。
+- 未来如需鉴权或多租户，在 Header 契约上扩展（如增加 `X-Tenant-ID`），现有接口签名不变。
 
 ## 4. 错误格式
 
@@ -85,8 +84,7 @@ HTTP 状态映射：
 | HTTP | 场景 |
 |---|---|
 | 400 | 参数错误 / Header 缺失 / 文件非法 |
-| 403 | Tenant 与 Knowledge Base 归属不符 |
-| 404 | 资源不存在或已删除 |
+| 404 | 资源不存在或已删除（含 Knowledge Base） |
 | 409 | 冲突（如重复上传同内容文档） |
 | 422 | Metadata 冲突（INGESTION_CONFLICT） |
 | 500 | Pipeline 内部 Stage 失败 |
@@ -330,8 +328,8 @@ Conversation 仅用于 Query Rewrite 的上下文来源，不做复杂 Memory。
 
 ## 14. Non-Negotiable
 
-1. 租户身份只从 Header 获取，请求体中的 tenant 字段一律忽略。
-2. v0.1 不做真实鉴权，但 Header 契约必须固定，未来鉴权升级不得改变接口签名。
+1. v0.1 为单一共享知识空间，不做鉴权，不区分租户。
+2. 知识库作用域只从 Header 获取，请求体中的知识库字段一律忽略；未来扩展鉴权 / 多租户不得改变现有接口签名。
 3. Query 必须使用 SSE 流式返回，`meta` 为首事件，`done` / `error` 为尾事件。
 4. 公开 API 默认不返回 Citation，Evidence 仅通过按需端点获取。
 5. Retrieval Trace 不得通过公开 API 暴露。
