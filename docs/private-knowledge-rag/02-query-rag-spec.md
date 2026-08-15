@@ -190,7 +190,6 @@ Retrieval Strategy 根据 Intent 动态选择。
 默认：
 
 ```text
-tenant_id
 knowledge_base_id
 ```
 

@@ -179,7 +179,6 @@ Qdrant 适合 v0.1：
 特别适合本项目的：
 
 ```text
-tenant_id
 knowledge_base_id
 product
 version

@@ -444,7 +444,6 @@ metadata
 
 ```json
 {
-  "tenant_id": "...",
   "knowledge_base_id": "...",
   "document_id": "...",
   "section_id": "...",
@@ -588,25 +587,21 @@ Qdrant Vector
 Keyword Index
 ```
 
-## 26. Multi-Tenant
+## 26. 查询作用域
 
 所有 Document / Chunk / Vector Payload 必须包含：
 
 ```text
-tenant_id
+knowledge_base_id
 ```
 
 Retrieval 必须强制：
 
 ```text
-tenant_id = current_tenant
-```
-
-以及：
-
-```text
 knowledge_base_id = current_knowledge_base
 ```
+
+v0.1 为单一共享知识空间，不区分租户。未来如需多租户，必须在 Ingestion 与 Retrieval 两层同时引入 `tenant_id`。
 
 ## 27. Parser 扩展
 
@@ -806,29 +801,27 @@ READY
 2. Document 必须保留 Product / Version。
 3. Version 必须进入 Chunk Metadata。
 4. Version 必须进入 Vector Payload。
-5. Tenant ID 必须进入 Vector Payload。
-6. Knowledge Base ID 必须进入 Vector Payload。
-7. Retrieval Filter 必须在 Vector DB 层执行。
-8. Parser 必须输出统一 Document AST。
-9. Chunk 不得直接依赖具体文件格式。
-10. Chunk 必须知道父 Document。
-11. Chunk 必须知道父 Section。
-12. Chunk 必须保留 heading_path。
-13. Chunk 必须保留 line_start / line_end。
-14. Code Block 默认不可拆分。
-15. Table 默认不可任意拆分。
-16. Semantic Chunk 优先于固定字符切割。
-17. Token Split 只作为 Semantic Chunk 超限时的 fallback。
-18. Vector DB 不是 Document 唯一 Source of Truth。
-19. Ingestion 必须幂等。
-20. Document 更新必须能够重新处理。
-21. Document 删除必须立即从 Retrieval 中消失。
-22. Physical Cleanup 可以异步。
-23. Parser / Chunker / Embedding 必须有版本号。
-24. Embedding Model 变化必须支持重新 Embedding。
-25. Chunker 变化必须支持重新 Chunk。
-26. Manual Upload 和未来自动 Sync 必须共用同一 Ingestion Pipeline。
-27. 所有 Ingestion Failure 必须能定位到具体 Stage。
-28. Document 只有在 Index 完整成功后才能进入 READY。
-29. Product / Version 不允许依赖 LLM 猜测作为最终事实。
-30. 所有租户数据必须在 Retrieval 层强制隔离。
+5. Knowledge Base ID 必须进入 Vector Payload。
+6. Retrieval Filter 必须在 Vector DB 层执行。
+7. Parser 必须输出统一 Document AST。
+8. Chunk 不得直接依赖具体文件格式。
+9. Chunk 必须知道父 Document。
+10. Chunk 必须知道父 Section。
+11. Chunk 必须保留 heading_path。
+12. Chunk 必须保留 line_start / line_end。
+13. Code Block 默认不可拆分。
+14. Table 默认不可任意拆分。
+15. Semantic Chunk 优先于固定字符切割。
+16. Token Split 只作为 Semantic Chunk 超限时的 fallback。
+17. Vector DB 不是 Document 唯一 Source of Truth。
+18. Ingestion 必须幂等。
+19. Document 更新必须能够重新处理。
+20. Document 删除必须立即从 Retrieval 中消失。
+21. Physical Cleanup 可以异步。
+22. Parser / Chunker / Embedding 必须有版本号。
+23. Embedding Model 变化必须支持重新 Embedding。
+24. Chunker 变化必须支持重新 Chunk。
+25. Manual Upload 和未来自动 Sync 必须共用同一 Ingestion Pipeline。
+26. 所有 Ingestion Failure 必须能定位到具体 Stage。
+27. Document 只有在 Index 完整成功后才能进入 READY。
+28. Product / Version 不允许依赖 LLM 猜测作为最终事实。

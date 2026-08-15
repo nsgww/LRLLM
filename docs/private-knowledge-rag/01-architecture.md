@@ -107,11 +107,10 @@ Vector DB / Search Index
 ## 4. 核心数据模型
 
 ```text
-Tenant
-└── KnowledgeBase
-    └── Document
-        ├── Section
-        └── Chunk
+KnowledgeBase
+└── Document
+    ├── Section
+    └── Chunk
 ```
 
 Document 至少包含：
@@ -145,22 +144,15 @@ chunk_type
 embedding
 ```
 
-## 5. Multi-Tenant
+## 5. 访问模型
 
-所有查询必须带：
+v0.1 为单一共享知识空间：
 
-```text
-tenant_id
-knowledge_base_id
-```
+- 知识由所有者自行上传与更新
+- 所有访问者看到相同的知识内容
+- 查询作用域为 `knowledge_base_id`
 
-隔离必须存在于：
-
-- Application Layer
-- Retrieval Layer
-- Storage Layer
-
-不能只依赖 Prompt。
+多租户不在 v0.1 范围内。未来如需引入，必须在 Application / Retrieval / Storage 三层同时加入隔离，不能只依赖 Prompt。
 
 ## 6. Version
 
@@ -197,7 +189,6 @@ MCP 怎么写提示词？
 API / Backend
     ↓
 PostgreSQL
-    ├── Tenant
     ├── KnowledgeBase
     ├── Document
     ├── Section
@@ -256,7 +247,7 @@ app/
 ## 10. Non-Negotiable
 
 - RAG 负责知识，Tool 负责行动，LLM 负责理解、推理和生成。
-- Tenant Isolation 不得只依赖 Prompt。
+- 查询必须显式限定 Knowledge Base 作用域。
 - Version 必须成为 Retrieval Filter。
 - Vector DB 不是 Document 唯一 Source of Truth。
 - 每次 Retrieval 必须可追踪。
