@@ -136,6 +136,52 @@ class DocumentRepository:
             .values(deleted_at=datetime.now(UTC))
         )
 
+    async def update_metadata(
+        self,
+        document_id: str,
+        *,
+        title: str | None,
+        doc_class: str | None,
+        source: str | None,
+        product: str | None,
+        version: str | None,
+    ) -> None:
+        await self._session.execute(
+            sa.update(DocumentRow)
+            .where(DocumentRow.id == uuid.UUID(document_id))
+            .values(
+                title=title,
+                doc_class=doc_class,
+                source=source,
+                product=product,
+                version=version,
+                updated_at=datetime.now(UTC),
+            )
+        )
+
+    async def update_processing(
+        self,
+        document_id: str,
+        *,
+        parser_version: str,
+        chunker_version: str,
+        embedding_model: str,
+        embedding_model_version: str,
+        processing_fingerprint: str,
+    ) -> None:
+        await self._session.execute(
+            sa.update(DocumentRow)
+            .where(DocumentRow.id == uuid.UUID(document_id))
+            .values(
+                parser_version=parser_version,
+                chunker_version=chunker_version,
+                embedding_model=embedding_model,
+                embedding_model_version=embedding_model_version,
+                processing_fingerprint=processing_fingerprint,
+                updated_at=datetime.now(UTC),
+            )
+        )
+
 
 class SectionRepository:
     def __init__(self, session: AsyncSession) -> None:
