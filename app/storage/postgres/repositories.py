@@ -136,6 +136,20 @@ class DocumentRepository:
             .values(deleted_at=datetime.now(UTC))
         )
 
+    async def distinct_product_versions(self, kb_id: str) -> list[dict]:
+        """Known products/versions for query_understanding grounding (08 section 4.1)."""
+        stmt = (
+            sa.select(DocumentRow.product, DocumentRow.version)
+            .where(
+                DocumentRow.knowledge_base_id == uuid.UUID(kb_id),
+                DocumentRow.deleted_at.is_(None),
+                DocumentRow.product.is_not(None),
+            )
+            .distinct()
+        )
+        rows = (await self._session.execute(stmt)).all()
+        return [{"product": product, "version": version} for product, version in rows]
+
     async def update_metadata(
         self,
         document_id: str,
@@ -256,6 +270,13 @@ class ChunkRepository:
             .where(ChunkRow.document_id == uuid.UUID(document_id))
             .values(deleted_at=datetime.now(UTC))
         )
+
+    async def list_ids_by_document(self, document_id: str) -> list[str]:
+        stmt = sa.select(ChunkRow.id).where(
+            ChunkRow.document_id == uuid.UUID(document_id),
+            ChunkRow.deleted_at.is_(None),
+        )
+        return [str(r) for r in (await self._session.execute(stmt)).scalars().all()]
 
     async def delete_by_document(self, document_id: str) -> list[str]:
         """Physical cleanup. Returns deleted chunk ids for Qdrant cleanup."""
