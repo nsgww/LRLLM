@@ -353,6 +353,16 @@ class IngestionJobRepository:
         )
         return list((await self._session.execute(stmt)).scalars().all())
 
+    async def list(
+        self,
+        document_id: str | None = None,
+        limit: int = 50,
+    ) -> list[IngestionJobRow]:
+        stmt = sa.select(IngestionJobRow).order_by(IngestionJobRow.created_at.desc()).limit(limit)
+        if document_id is not None:
+            stmt = stmt.where(IngestionJobRow.document_id == uuid.UUID(document_id))
+        return list((await self._session.execute(stmt)).scalars().all())
+
 
 class ConversationRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -363,6 +373,12 @@ class ConversationRepository:
         self._session.add(row)
         await self._session.flush()
         return row
+
+    async def get(self, conversation_id: str) -> ConversationRow | None:
+        stmt = sa.select(ConversationRow).where(
+            ConversationRow.id == uuid.UUID(conversation_id)
+        )
+        return (await self._session.execute(stmt)).scalar_one_or_none()
 
     async def add_message(
         self,

@@ -34,6 +34,7 @@ from app.retrieval.planner import RetrievalStrategy, plan
 from app.retrieval.rerank import RerankService
 from app.storage.postgres.repositories import (
     ConversationRepository,
+    ChunkRepository,
     DocumentRepository,
     QueryTraceRepository,
 )
@@ -426,3 +427,48 @@ class QueryService:
                 await session.commit()
         except Exception:
             pass  # tracing must never break the request path
+
+    async def get_answer_evidence(self, answer_id: str) -> dict:
+        """On-demand evidence for an answer (05-api-spec section 9).
+
+        Only SUPPORTED / PARTIALLY_SUPPORTED answers expose evidence.
+        """
+        async with self._session_factory() as session:
+            trace = await QueryTraceRepository(session).get_by_answer(answer_id)
+            if trace is None:
+                raise AppError(
+                    code="ANSWER_NOT_FOUND",
+                    message=f"answer {answer_id} not found",
+                    http_status=404,
+                )
+            if (trace.evidence_status or "") not in ("SUPPORTED", "PARTIALLY_SUPPORTED"):
+                return {"answer_id": answer_id, "evidence": []}
+
+            selected = trace.selected_chunks or []
+            chunk_ids = [c["chunk_id"] for c in selected]
+            chunk_rows = {str(r.id): r for r in await ChunkRepository(session).get_many(chunk_ids)}
+            doc_ids = {c["document_id"] for c in selected}
+            documents = DocumentRepository(session)
+            doc_titles = {}
+            for doc_id in doc_ids:
+                doc = await documents.get(doc_id)
+                if doc is not None:
+                    doc_titles[doc_id] = doc.title
+
+        evidence = []
+        for item in selected:
+            row = chunk_rows.get(item["chunk_id"])
+            evidence.append(
+                {
+                    "document_id": item["document_id"],
+                    "document_title": doc_titles.get(item["document_id"]),
+                    "chunk_id": item["chunk_id"],
+                    "product": item.get("product"),
+                    "version": item.get("version"),
+                    "heading_path": item.get("heading_path"),
+                    "line_start": item.get("line_start"),
+                    "line_end": item.get("line_end"),
+                    "excerpt": (row.raw_content or row.text)[:500] if row else None,
+                }
+            )
+        return {"answer_id": answer_id, "evidence": evidence}

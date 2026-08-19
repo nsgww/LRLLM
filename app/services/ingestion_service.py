@@ -16,6 +16,7 @@ from app.core.errors import AppError
 from app.domain.document import Document
 from app.domain.ingestion import IngestionJob
 from app.storage.base import VectorStore
+from app.storage.postgres.orm import DocumentRow, IngestionJobRow
 from app.storage.postgres.repositories import (
     ChunkRepository,
     DocumentRepository,
@@ -149,3 +150,37 @@ class IngestionService:
             await session.commit()
         # remove vectors so the document disappears from vector recall too
         await self._vector_store.delete(chunk_ids)
+
+    async def list_documents(self, kb_id: str, limit: int = 50) -> list[DocumentRow]:
+        async with self._session_factory() as session:
+            return await DocumentRepository(session).list(kb_id, limit)
+
+    async def get_document(self, document_id: str) -> DocumentRow:
+        async with self._session_factory() as session:
+            row = await DocumentRepository(session).get(document_id)
+        if row is None:
+            raise AppError(
+                code="DOCUMENT_NOT_FOUND",
+                message=f"document {document_id} not found",
+                http_status=404,
+            )
+        return row
+
+    async def get_job(self, job_id: str) -> IngestionJobRow:
+        async with self._session_factory() as session:
+            row = await IngestionJobRepository(session).get(job_id)
+        if row is None:
+            raise AppError(
+                code="JOB_NOT_FOUND",
+                message=f"ingestion job {job_id} not found",
+                http_status=404,
+            )
+        return row
+
+    async def list_jobs(
+        self,
+        document_id: str | None = None,
+        limit: int = 50,
+    ) -> list[IngestionJobRow]:
+        async with self._session_factory() as session:
+            return await IngestionJobRepository(session).list(document_id, limit)
