@@ -2,6 +2,8 @@
 and scope filters (knowledge_base_id).
 """
 
+from __future__ import annotations
+
 import uuid
 from datetime import UTC, datetime
 
