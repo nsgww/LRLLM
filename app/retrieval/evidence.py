@@ -1,9 +1,9 @@
-"""Evidence check (02-query-rag-spec section 12, 08-prompt-spec section 4.4).
+"""证据核查（02-query-rag-spec 第 12 节，08-prompt-spec 第 4.4 节）。
 
-- Relevance is not sufficiency; "OAuth != OAuth 2.0" cases must be
-  judged INSUFFICIENT.
-- The fallback converges conservatively to INSUFFICIENT (08 section 5).
-- supporting_chunk_ids may only reference chunks actually provided.
+- 相关性不等于充分性；“OAuth ≠ OAuth 2.0”的情况必须
+  判定为“INSUFFICIENT”。
+- 备选方案会保守地收敛至“INSUFFICIENT”（08 第 5 节）。
+- supporting_chunk_ids 只能引用实际提供的片段。
 """
 
 from pydantic import BaseModel

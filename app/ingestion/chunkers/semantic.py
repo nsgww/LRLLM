@@ -1,12 +1,12 @@
-"""Semantic chunker (04 sections 14-17).
+"""语义分块器（第04节第14-17段）。
 
-Rules:
-- Heading / Paragraph / List / Table / Code Block form semantic units.
-- Code blocks are never split; an overlong code block becomes its own
-  over-budget chunk (explicitly allowed in v0.1).
-- Tables stay whole; raw_content keeps the raw markdown, text keeps the
-  normalized representation used for retrieval.
-- Token split only applies to oversized text units.
+规则：
+- 标题 / 段落 / 列表 / 表格 / 代码块构成语义单元。
+- 代码块绝不被拆分；过长的代码块将作为独立的
+  超限分块处理（v0.1版本中明确允许）。
+- 表格保持完整；raw_content 保留原始 Markdown 格式，text 则保留
+  用于检索的规范化表示形式。
+- 词元拆分仅适用于超大文本单元。
 """
 
 import hashlib

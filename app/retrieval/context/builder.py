@@ -1,14 +1,14 @@
-"""Context building (02-query-rag-spec sections 15-17, 06 section 8).
+"""上下文构建（02-query-rag-spec 第 15-17 节，06 第 8 节）。
 
-- Dedup by chunk_id.
-- Version grouping with per-version cap when the user did not specify a
-  version; boundaries are preserved in the final context text.
-- Tables use raw_content for the final context (normalized text was for
-  retrieval only).
-- Everything is subject to the token budget; quality beats quantity.
+- 按 chunk_id 进行去重。
+- 当用户未指定版本时，按版本分组并设置每个版本的上限；
+  最终上下文文本中将保留分组边界。
+- 表格在最终上下文中使用 raw_content（规范化文本仅用于
+  检索）。
+- 所有内容均受令牌配额限制；质量优先于数量。
 
-Context expansion (parent section / neighbours) is intentionally minimal
-in v0.1; heading path is always included with each chunk.
+在 v0.1 版本中，上下文扩展（父章节/邻近章节）被有意控制在最小范围；
+每个片段中始终包含标题路径。
 """
 
 from dataclasses import dataclass, field

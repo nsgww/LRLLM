@@ -1,9 +1,9 @@
-"""Hybrid retrieval and RRF fusion (06-retrieval-spec sections 4-6, 11).
+"""混合检索与RRF融合（06-检索规范第4-6、11节）。
 
-- Vector and keyword recall run concurrently.
-- Single-path failure degrades to the other path and is recorded;
-  both failing fails the request with a classified stage.
-- Fusion: Reciprocal Rank Fusion, dedup by chunk_id, union of both lists.
+- 向量检索和关键词检索并行运行。
+- 单一路径失败时，系统会切换至另一条路径并记录该情况；
+  若两条路径均失败，则请求失败，并标注为“分类阶段”。
+- 融合：互逆排名融合，按chunk_id去重，合并两份列表。
 """
 
 import asyncio

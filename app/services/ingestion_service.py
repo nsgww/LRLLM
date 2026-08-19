@@ -1,10 +1,10 @@
-"""Document upload / reindex / delete (05-api-spec section 6,
-04-ingestion-pipeline-spec sections 3/24/25).
+"""文档上传/重新索引/删除（05-api-spec 第 6 节，
+04-ingestion-pipeline-spec 第 3、24、25 节）。
 
-- Upload only creates Document + Job; parsing is async (worker).
-- Duplicate content in the same knowledge base is rejected (409).
-- Delete is soft delete: retrieval exclusion is immediate, Qdrant point
-  removal happens here, physical row cleanup is left to background jobs.
+- 上传操作仅创建文档和任务；解析过程为异步（由工作进程处理）。
+- 同一知识库中的重复内容将被拒绝（409）。
+- 删除操作为软删除：检索排除立即生效，Qdrant 数据点的
+  移除在此处进行，物理行清理则交由后台任务处理。
 """
 
 import hashlib

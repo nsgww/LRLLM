@@ -1,7 +1,7 @@
-"""Central configuration (10-project-structure section 5).
+"""中央配置（10-项目结构 第5节）。
 
-All environment-driven settings live here. Retrieval parameters follow
-06-retrieval-spec section 12 and must stay configurable, never hardcoded.
+所有环境驱动的设置均位于此处。检索参数应遵循
+06-检索规范 第12节的规定，且必须保持可配置状态，绝不能硬编码。
 """
 
 from pydantic_settings import BaseSettings, SettingsConfigDict

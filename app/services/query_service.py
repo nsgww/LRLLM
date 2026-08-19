@@ -1,9 +1,9 @@
-"""Query pipeline orchestration (02-query-rag-spec section 1, 05 section 8).
+"""查询管道协调（02-query-rag-spec 第 1 节，05 第 8 节）。
 
-Understanding -> Rewrite -> Decomposition -> Planning -> Filters ->
-Hybrid Retrieval -> Rerank -> Evidence Check -> Context -> LLM ->
-Grounded Answer. Every step falls back per 08-prompt-spec section 5
-and is recorded in the Retrieval Trace.
+理解 -> 重写 -> 分解 -> 规划 -> 过滤 ->
+混合检索 -> 重新排序 -> 证据验证 -> 上下文 -> 大型语言模型 ->
+基于上下文的答案。每个步骤均按 08-prompt-spec 第 5 节的规定进行回退，
+并记录在检索轨迹中。
 """
 
 import time

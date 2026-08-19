@@ -1,10 +1,10 @@
-"""Markdown parser: raw markdown -> DocumentAST (04 sections 6-10).
+"""Markdown 解析器：原始 Markdown → 文档抽象语法树（DocumentAST）（第 04 节 6-10）。
 
-- Preserves heading_path and 1-based line ranges on every block.
-- Code fences keep their raw text (including fences) so code blocks stay
-  intact semantic units.
-- Front matter is collected as metadata; conflict resolution with explicit
-  upload metadata happens in app/ingestion/metadata.py, not here.
+- 保留每个代码块的 heading_path 以及以 1 为起点的行范围。
+- 代码围栏保留其原始文本（包括围栏本身），因此代码块保持
+  完整的语义单元。
+- 前置信息被收集为元数据；与显式
+  上传元数据的冲突解决在 app/ingestion/metadata.py 中进行，而非在此处。
 """
 
 import re

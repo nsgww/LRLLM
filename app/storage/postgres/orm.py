@@ -1,8 +1,8 @@
-"""ORM rows aligned with 09-database-schema DDL.
+"""ORM 行与 09-database-schema DDL 保持一致。
 
-Enum types reuse the domain enums; labels match the PostgreSQL enum types.
-search_tsv is maintained by the database trigger (09 section 5) and is
-never written by application code.
+枚举类型复用域枚举；标签与 PostgreSQL 枚举类型一致。
+search_tsv 由数据库触发器（09 节第 5 部分）维护，
+应用程序代码绝不会写入该字段。
 """
 
 import uuid

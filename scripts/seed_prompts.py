@@ -1,10 +1,8 @@
-"""Import prompt seed templates into prompt_templates (10 section 6).
-
-Each seed file becomes version 1 PUBLISHED when no PUBLISHED version
-exists for its key. Existing published prompts are never overwritten;
-runtime changes go through new versions (08 section 2).
-
-Run: python -m scripts.seed_prompts
+"""将提示词种子模板导入到 prompt_templates 中（第 10 节第 6 条）。
+当某个密钥下不存在已发布的版本时，
+每个种子文件将作为版本 1 发布。已发布的提示词绝不会被覆盖；
+运行时更改将通过新版本实现（第 08 节第 2 条）。
+运行：python -m scripts.seed_prompts
 """
 
 import asyncio

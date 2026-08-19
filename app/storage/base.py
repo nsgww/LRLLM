@@ -1,8 +1,8 @@
-"""Storage interfaces (04-ingestion-pipeline-spec section 23,
-06-retrieval-spec section 10).
+"""存储接口（04-数据导入管道规范第23节，
+06-数据检索规范第10节）。
 
-Filters are exact-match only and must be pushed down to the storage layer.
-In-memory scope filtering after recall is forbidden.
+过滤器仅支持精确匹配，且必须下推至存储层。
+禁止在数据检索后进行内存范围过滤。
 """
 
 from dataclasses import dataclass, field

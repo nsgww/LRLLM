@@ -1,7 +1,7 @@
-"""Query endpoint with SSE streaming (05-api-spec section 8).
+"""使用 SSE 流式传输的查询端点（05-api-spec 第 8 节）。
 
-Event order: meta first, done/error last. Citations and chunk content
-are never included in any event.
+事件顺序：元数据在前，完成/错误在后。引用和片段内容
+绝不会包含在任何事件中。
 """
 
 import json

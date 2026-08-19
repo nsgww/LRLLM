@@ -1,8 +1,8 @@
-"""Structured LLM output parsing (08-prompt-spec section 5).
+"""结构化大语言模型（LLM）输出解析（08-prompt-spec 第 5 节）。
 
-Flow: LLM output -> JSON extraction -> schema validation -> one retry
-with the validation error -> stage-level failure. Callers decide the
-fallback value; evidence_check must fall back conservatively.
+流程：LLM 输出 -> JSON 提取 -> 模式验证 -> 根据验证错误重试一次
+-> 阶段级失败。调用方决定
+回退值；evidence_check 必须采取保守的回退策略。
 """
 
 import json

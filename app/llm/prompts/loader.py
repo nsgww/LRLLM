@@ -1,9 +1,9 @@
-"""Prompt loading with runtime hot reload (08-prompt-spec section 2).
+"""通过运行时热重载加载提示（08-prompt-spec 第 2 节）。
 
-- Business code references prompts by key; the currently PUBLISHED
-  version is resolved from the database.
-- A pinned key + version lookup is available for eval replay and debug.
-- Local cache with TTL; hot modifications take effect within seconds.
+- 业务代码通过键引用提示；当前已发布的
+  版本从数据库中解析出来。
+- 提供固定键 + 版本查找功能，用于评估重放和调试。
+- 带 TTL 的本地缓存；热修改在几秒内生效。
 """
 
 import time

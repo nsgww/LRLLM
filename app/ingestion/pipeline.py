@@ -1,11 +1,11 @@
-"""Ingestion pipeline orchestration (04 sections 2/3/24/34).
+"""数据摄取管道编排（第04节 2/3/24/34）。
 
-Stage order: HASH -> PARSE -> METADATA -> SECTION -> CHUNK -> EMBEDDING
--> VECTOR_INDEX -> KEYWORD_INDEX -> READY.
+处理阶段顺序：HASH -> PARSE -> METADATA -> SECTION -> CHUNK -> EMBEDDING
+-> VECTOR_INDEX -> KEYWORD_INDEX -> READY。
 
-- Idempotent: unchanged processing fingerprint skips reprocessing.
-- Every failure is locatable to a concrete stage with a classified code.
-- A document only becomes READY after all indexes succeed.
+- 幂等性：处理指纹未发生变化时，将跳过重新处理。
+- 每次失败均可定位到带有分类代码的具体阶段。
+- 只有在所有索引均成功后，文档才会进入“READY”状态。
 """
 
 import hashlib

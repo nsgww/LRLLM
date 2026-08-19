@@ -1,8 +1,8 @@
-"""Error classification (single source of truth).
+"""错误分类（单一数据源）。
 
-Query stages follow 02-query-rag-spec section 21.
-Ingestion codes follow 04-ingestion-pipeline-spec section 32.
-Never collapse failures into a generic RAG_ERROR.
+查询阶段遵循 02-query-rag-spec 第 21 节的规定。
+数据摄取代码遵循 04-ingestion-pipeline-spec 第 32 节的规定。
+切勿将各种故障归类为通用的 RAG_ERROR。
 """
 
 from enum import Enum

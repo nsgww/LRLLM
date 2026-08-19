@@ -1,9 +1,9 @@
-"""Qdrant VectorStore implementation (06-retrieval-spec sections 4/10,
-09-database-schema section 10).
+"""Qdrant VectorStore 的实现（06-检索规范第 4/10 节，
+09-数据库模式第 10 节）。
 
-- Point ID is the chunk_id, enabling exact delete and reconciliation.
-- All scope/metadata filters are pushed into the Qdrant query filter,
-  never applied in memory after recall.
+- 点 ID 即 chunk_id，从而支持精确删除和数据同步。
+- 所有作用域/元数据过滤器都会推入 Qdrant 查询过滤器中，
+  在数据被调取后绝不会在内存中应用。
 """
 
 from qdrant_client import AsyncQdrantClient

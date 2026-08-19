@@ -1,8 +1,8 @@
-"""Token counting and token-based splitting (04 section 15).
+"""词元计数和基于词元的拆分（04 第 15 节）。
 
-Token split is only a fallback for semantic units exceeding max tokens.
-Split boundaries prefer paragraph -> line -> sentence, never mid-sentence
-when avoidable. Code blocks are never split here (04 section 16).
+词元拆分仅作为语义单元超过最大词元数时的备用方案。
+拆分边界优先考虑段落 → 行 → 句子，只要可以避免，绝不在句子中间拆分。
+此处绝不拆分代码块（04 第 16 节）。
 """
 
 import re

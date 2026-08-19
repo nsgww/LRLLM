@@ -1,9 +1,9 @@
-"""Metadata filter construction (06-retrieval-spec section 3).
+"""元数据过滤器的构建（06-检索规范第3节）。
 
-knowledge_base_id always comes from the API scope contract, never from
-LLM output. version becomes an exact-match filter only when the user
-explicitly specified one; otherwise it stays unset so multiple versions
-can participate (02 section 9).
+knowledge_base_id 始终来自 API 范围契约，绝不会来自
+LLM 输出。version 仅在用户
+明确指定时才成为精确匹配过滤器；否则它保持未设置状态，以便多个版本
+均可参与（02 第9节）。
 """
 
 from app.domain.query import QueryUnderstanding, SubQuery

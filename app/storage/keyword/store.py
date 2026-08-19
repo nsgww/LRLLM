@@ -1,14 +1,14 @@
-"""PostgreSQL keyword search (06-retrieval-spec section 5).
+"""PostgreSQL 关键字搜索（06-retrieval-spec 第 5 节）。
 
-- FTS over the trigger-maintained weighted tsvector (09 section 5).
-- pg_trgm similarity is the fallback for CJK text and exact tokens such as
-  API names, error codes and version strings, which FTS 'simple' config
-  cannot segment.
-- Scope/metadata filters are SQL WHERE conditions, never in-memory.
+- 基于触发器维护的加权 tsvector 进行全文搜索（09 第 5 节）。
+- pg_trgm 相似度是 CJK 文本以及 API 名称、错误代码和版本字符串等
+  精确令牌的备用方案，因为 FTS 的“简单”配置
+  无法对这些内容进行分段。
+- 范围/元数据过滤器是 SQL WHERE 条件，绝不会在内存中处理。
 
-upsert/delete are no-ops: chunks already live in the same PostgreSQL
-database (ChunkRepository owns writes, the trigger maintains search_tsv,
-and soft delete excludes rows from search immediately).
+upsert/delete 操作为空操作：块已存在于同一 PostgreSQL
+数据库中（ChunkRepository 负责写入操作，触发器维护 search_tsv，
+而软删除会立即将行从搜索结果中排除）。
 """
 
 import sqlalchemy as sa
