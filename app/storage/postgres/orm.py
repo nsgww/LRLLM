@@ -157,7 +157,10 @@ class ConversationMessageRow(Base):
     conversation_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), sa.ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
     )
-    role: Mapped[str] = mapped_column(sa.Text, nullable=False)  # USER / ASSISTANT / SYSTEM
+    role: Mapped[str] = mapped_column(
+        sa.Enum("USER", "ASSISTANT", "SYSTEM", name="message_role", create_type=False),
+        nullable=False,
+    )
     content: Mapped[str] = mapped_column(sa.Text, nullable=False)
     answer_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), server_default=sa.func.now())
@@ -206,7 +209,11 @@ class PromptTemplateRow(Base):
     version: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     content: Mapped[str] = mapped_column(sa.Text, nullable=False)
     variables: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
-    status: Mapped[str] = mapped_column(sa.Text, nullable=False, default="DRAFT")
+    status: Mapped[str] = mapped_column(
+        sa.Enum("DRAFT", "PUBLISHED", "ARCHIVED", name="prompt_status", create_type=False),
+        nullable=False,
+        default="DRAFT",
+    )
     created_by: Mapped[str | None] = mapped_column(sa.Text)
     created_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), server_default=sa.func.now())
     updated_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), server_default=sa.func.now())
