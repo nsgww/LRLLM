@@ -7,7 +7,12 @@
 
 import asyncio
 import re
+import sys
 from pathlib import Path
+
+# allow running both as `python -m scripts.seed_prompts` and
+# `python scripts/seed_prompts.py` from the repo root
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.core.config import get_settings
 from app.core.logging import setup_logging
