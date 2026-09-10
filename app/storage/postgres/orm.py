@@ -137,6 +137,8 @@ class IngestionJobRow(Base):
     embedding_count: Mapped[int | None] = mapped_column(sa.Integer)
     error_code: Mapped[str | None] = mapped_column(sa.Text)
     error_message: Mapped[str | None] = mapped_column(sa.Text)
+    attempt_count: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), server_default=sa.func.now())
     started_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))

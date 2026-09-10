@@ -36,6 +36,9 @@ class QueryTraceBuilder:
     final_answer: str | None = None
     prompt_versions: dict = field(default_factory=dict)
     fallbacks: list[str] = field(default_factory=list)
+    # Stage the query is currently executing; used so an unclassified
+    # exception is reported against the real stage (05 Non-Negotiable #6).
+    current_stage: str | None = None
     error_stage: str | None = None
     latency_ms: int | None = None
 

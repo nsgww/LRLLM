@@ -25,6 +25,9 @@ class VectorStore(Protocol):
     async def delete(self, chunk_ids: list[str]) -> None:
         ...
 
+    async def list_point_ids(self, batch: int = 1000) -> list[str]:
+        ...
+
     async def search(
         self,
         vector: list[float],

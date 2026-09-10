@@ -4,6 +4,7 @@ The reranker may only reorder candidates. Any failure or contract
 violation falls back to RRF order, and the fallback is recorded in Trace.
 """
 
+import logging
 from dataclasses import dataclass, field
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -12,6 +13,8 @@ from app.core.config import Settings
 from app.domain.retrieval import RankedChunk
 from app.reranker.interface import Reranker
 from app.storage.postgres.repositories import ChunkRepository
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -43,7 +46,9 @@ class RerankService:
         candidate_ids = [cid for cid, _ in candidates]
         rrf_scores = dict(candidates)
         async with self._session_factory() as session:
-            rows = await ChunkRepository(session).get_many(candidate_ids)
+            # require_ready: vector recall may surface points whose document is
+            # still PROCESSING/FAILED; only READY documents may be served.
+            rows = await ChunkRepository(session).get_many(candidate_ids, require_ready=True)
         rows_by_id = {str(r.id): r for r in rows}
         ordered_rows = [rows_by_id[cid] for cid in candidate_ids if cid in rows_by_id]
 
@@ -63,7 +68,8 @@ class RerankService:
                     ]
                 )
             except Exception:
-                pass  # degrade to RRF order, flagged below
+                # degrade to RRF order (flagged below), but keep the reason visible
+                logger.warning("reranker failed; falling back to RRF order", exc_info=True)
 
         top_n = self._settings.rerank_top_n
         return RerankOutcome(

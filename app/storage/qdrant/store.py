@@ -18,6 +18,7 @@ PAYLOAD_INDEX_FIELDS = (
     "document_id",
     "product",
     "version",
+    "doc_class",
     "chunk_type",
 )
 
@@ -27,6 +28,9 @@ class QdrantVectorStore:
         self._client = AsyncQdrantClient(url=url)
         self._collection = collection
         self._dimension = dimension
+
+    async def aclose(self) -> None:
+        await self._client.close()
 
     async def ensure_collection(self) -> None:
         if not await self._client.collection_exists(self._collection):
@@ -97,6 +101,23 @@ class QdrantVectorStore:
             collection_name=self._collection,
             points_selector=qm.PointIdsList(points=chunk_ids),
         )
+
+    async def list_point_ids(self, batch: int = 1000) -> list[str]:
+        """All point ids, for orphan reconciliation against PostgreSQL chunks."""
+        ids: list[str] = []
+        offset = None
+        while True:
+            points, offset = await self._client.scroll(
+                collection_name=self._collection,
+                limit=batch,
+                offset=offset,
+                with_payload=False,
+                with_vectors=False,
+            )
+            ids.extend(str(p.id) for p in points)
+            if offset is None:
+                break
+        return ids
 
     async def search(
         self,

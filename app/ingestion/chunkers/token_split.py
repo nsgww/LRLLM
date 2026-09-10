@@ -5,7 +5,10 @@
 此处绝不拆分代码块（04 第 16 节）。
 """
 
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 _SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[。！？.!?;；\n])")
 
@@ -20,6 +23,11 @@ class TokenCounter:
 
             self._enc = tiktoken.get_encoding(encoding_name)
         except Exception:
+            # char-based estimate is a poor proxy for CJK; make the downgrade visible
+            logger.warning(
+                "tiktoken encoding %r unavailable; falling back to char-based token estimate",
+                encoding_name,
+            )
             self._enc = None
 
     def count(self, text: str) -> int:

@@ -168,6 +168,8 @@ CREATE TABLE ingestion_jobs (
     embedding_count   INT,
     error_code        TEXT,
     error_message     TEXT,
+    attempt_count     INT NOT NULL DEFAULT 0,
+    next_attempt_at   TIMESTAMPTZ,        -- retry backoff gate for PENDING jobs
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     started_at        TIMESTAMPTZ,
     finished_at       TIMESTAMPTZ
@@ -177,6 +179,9 @@ CREATE INDEX idx_jobs_document ON ingestion_jobs (document_id, created_at DESC);
 
 CREATE INDEX idx_jobs_status ON ingestion_jobs (status)
     WHERE status IN ('PENDING', 'RUNNING');
+
+CREATE INDEX idx_jobs_pending_due ON ingestion_jobs (next_attempt_at, created_at)
+    WHERE status = 'PENDING';
 
 -- 7. Conversation
 CREATE TABLE conversations (

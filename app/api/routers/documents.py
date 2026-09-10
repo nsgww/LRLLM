@@ -3,7 +3,8 @@
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 
 from app.api.deps import require_kb_id
-from app.api.schemas import DocumentOut, UploadOut
+from app.api.pagination import decode_cursor, next_cursor
+from app.api.schemas import DocumentOut, Page, UploadOut
 
 router = APIRouter(tags=["documents"])
 
@@ -61,14 +62,21 @@ async def upload_document(
     return _upload_out(result)
 
 
-@router.get("/documents", response_model=list[DocumentOut])
+@router.get("/documents", response_model=Page[DocumentOut])
 async def list_documents(
     request: Request,
     limit: int = 50,
+    cursor: str | None = None,
     kb_id: str = Depends(require_kb_id),
-) -> list[DocumentOut]:
-    rows = await request.app.state.ingestion_service.list_documents(kb_id, limit)
-    return [_doc_out(r) for r in rows]
+) -> Page[DocumentOut]:
+    rows, has_more = await request.app.state.ingestion_service.list_documents(
+        kb_id, limit, decode_cursor(cursor) if cursor else None
+    )
+    return Page[DocumentOut](
+        items=[_doc_out(r) for r in rows],
+        next_cursor=next_cursor(rows, has_more),
+        has_more=has_more,
+    )
 
 
 @router.get("/documents/{document_id}", response_model=DocumentOut)

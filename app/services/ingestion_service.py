@@ -9,12 +9,14 @@
 
 import hashlib
 from dataclasses import dataclass
+from datetime import datetime
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.errors import AppError
 from app.domain.document import Document
-from app.domain.ingestion import IngestionJob
+from app.domain.ingestion import IngestionJob, JobStatus
 from app.storage.base import VectorStore
 from app.storage.postgres.orm import DocumentRow, IngestionJobRow
 from app.storage.postgres.repositories import (
@@ -61,6 +63,14 @@ class IngestionService:
             raise AppError(code="FILE_EMPTY", message="empty file", http_status=400)
 
         content_hash = hashlib.sha256(content).hexdigest()
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise AppError(
+                code="FILE_INVALID",
+                message="file must be UTF-8 encoded Markdown",
+                http_status=400,
+            ) from exc
 
         async with self._session_factory() as session:
             kb = await KnowledgeBaseRepository(session).get(kb_id)
@@ -88,7 +98,7 @@ class IngestionService:
                     source=metadata.get("source"),
                     product=metadata.get("product"),
                     version=metadata.get("version"),
-                    content=content.decode("utf-8"),
+                    content=text,
                     content_hash=content_hash,
                 )
             )
@@ -99,7 +109,17 @@ class IngestionService:
                     content_hash=content_hash,
                 )
             )
-            await session.commit()
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                # Lost a race against a concurrent upload of identical content
+                # (uq_document_kb_hash); surface the documented 409 instead of 500.
+                await session.rollback()
+                raise AppError(
+                    code="DOCUMENT_ALREADY_EXISTS",
+                    message="identical content already exists in this knowledge base",
+                    http_status=409,
+                ) from exc
             return UploadResult(
                 document_id=str(document.id),
                 ingestion_job_id=str(job.id),
@@ -151,9 +171,11 @@ class IngestionService:
         # remove vectors so the document disappears from vector recall too
         await self._vector_store.delete(chunk_ids)
 
-    async def list_documents(self, kb_id: str, limit: int = 50) -> list[DocumentRow]:
+    async def list_documents(
+        self, kb_id: str, limit: int = 50, cursor: tuple[datetime, str] | None = None
+    ) -> tuple[list[DocumentRow], bool]:
         async with self._session_factory() as session:
-            return await DocumentRepository(session).list(kb_id, limit)
+            return await DocumentRepository(session).list(kb_id, limit, cursor)
 
     async def get_document(self, document_id: str) -> DocumentRow:
         async with self._session_factory() as session:
@@ -180,7 +202,11 @@ class IngestionService:
     async def list_jobs(
         self,
         document_id: str | None = None,
+        status: JobStatus | None = None,
         limit: int = 50,
-    ) -> list[IngestionJobRow]:
+        cursor: tuple[datetime, str] | None = None,
+    ) -> tuple[list[IngestionJobRow], bool]:
         async with self._session_factory() as session:
-            return await IngestionJobRepository(session).list(document_id, limit)
+            return await IngestionJobRepository(session).list(
+                document_id, status, limit, cursor
+            )
