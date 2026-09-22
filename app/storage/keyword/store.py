@@ -26,6 +26,7 @@ FROM chunks c
 JOIN documents d ON d.id = c.document_id AND d.deleted_at IS NULL,
      plainto_tsquery('simple', :query) q
 WHERE c.deleted_at IS NULL
+  AND c.is_parent = false
   AND c.knowledge_base_id = :kb_id
   AND (:product IS NULL OR c.product = :product)
   AND (:version IS NULL OR c.version = :version)
@@ -44,6 +45,7 @@ SELECT c.id::text AS chunk_id,
 FROM chunks c
 JOIN documents d ON d.id = c.document_id AND d.deleted_at IS NULL
 WHERE c.deleted_at IS NULL
+  AND c.is_parent = false
   AND c.knowledge_base_id = :kb_id
   AND (:product IS NULL OR c.product = :product)
   AND (:version IS NULL OR c.version = :version)

@@ -103,6 +103,11 @@ class ChunkRow(Base):
         nullable=False,
         default=ChunkType.TEXT,
     )
+    # 父子切块（04 节 17.1）：父块只存 PG 提供完整上下文，不参与检索
+    parent_chunk_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), sa.ForeignKey("chunks.id")
+    )
+    is_parent: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
     chunk_index: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     token_count: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     content_hash: Mapped[str] = mapped_column(sa.Text, nullable=False)

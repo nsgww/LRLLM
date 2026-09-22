@@ -49,6 +49,7 @@ class RankedChunk:
     line_end: int
     chunk_type: str = "TEXT"
     raw_content: str | None = None
+    parent_chunk_id: str | None = None
     product: str | None = None
     version: str | None = None
     sub_query_id: str | None = None

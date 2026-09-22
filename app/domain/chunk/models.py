@@ -29,6 +29,8 @@ class Chunk:
     content_hash: str
     chunk_type: ChunkType = ChunkType.TEXT
     raw_content: str | None = None
+    parent_chunk_id: str | None = None  # 父块 id；父块本身为 None
+    is_parent: bool = False             # 父块只存 PostgreSQL，不参与检索
     product: str | None = None
     version: str | None = None
     embedding_model: str | None = None

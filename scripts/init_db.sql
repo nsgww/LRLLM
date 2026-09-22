@@ -108,6 +108,8 @@ CREATE TABLE chunks (
     line_start             INT NOT NULL,
     line_end               INT NOT NULL,
     chunk_type             chunk_type NOT NULL DEFAULT 'TEXT',
+    parent_chunk_id        UUID REFERENCES chunks(id),  -- 父块；父块只存 PG，不参与检索
+    is_parent              BOOLEAN NOT NULL DEFAULT false,
     chunk_index            INT NOT NULL,
     token_count            INT NOT NULL,
     content_hash           TEXT NOT NULL,
@@ -127,6 +129,9 @@ CREATE INDEX idx_chunks_kb ON chunks (knowledge_base_id)
     WHERE deleted_at IS NULL;
 
 CREATE INDEX idx_chunks_product_version ON chunks (knowledge_base_id, product, version)
+    WHERE deleted_at IS NULL;
+
+CREATE INDEX idx_chunks_parent ON chunks (parent_chunk_id)
     WHERE deleted_at IS NULL;
 
 CREATE INDEX idx_chunks_tsv ON chunks USING GIN (search_tsv);

@@ -243,6 +243,8 @@ class ChunkRepository:
                 line_start=c.line_start,
                 line_end=c.line_end,
                 chunk_type=c.chunk_type,
+                parent_chunk_id=uuid.UUID(c.parent_chunk_id) if c.parent_chunk_id else None,
+                is_parent=c.is_parent,
                 chunk_index=c.chunk_index,
                 token_count=c.token_count,
                 content_hash=c.content_hash,

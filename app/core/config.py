@@ -56,6 +56,14 @@ class Settings(BaseSettings):
     # chunking / context
     max_chunk_tokens: int = 512
     context_token_budget: int = 6000
+    # 父块预算：子块检索、父块提供完整上下文（04 节 17.1）
+    parent_chunk_tokens: int = 1200
+    # 命中子块后是否在 Context 中扩展为父块全文
+    context_expand_to_parent: bool = True
+    # 语义切分：超长段落按句子 Embedding 相似度低谷断点（04 节 15.1）
+    # 默认关闭；开启后入库阶段会额外消耗 Embedding 调用
+    semantic_split_enabled: bool = False
+    semantic_split_threshold: float = 0.5
 
     # prompt loading
     prompt_cache_ttl_seconds: int = 5
