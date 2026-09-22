@@ -5,6 +5,8 @@
   精确令牌的备用方案，因为 FTS 的“简单”配置
   无法对这些内容进行分段。
 - 范围/元数据过滤器是 SQL WHERE 条件，绝不会在内存中处理。
+- 只有处于 READY 状态的 Document 的 Chunk 才可被召回（04 第 34 节：
+  索引未完整成功前不得对外服务）。
 
 upsert/delete 操作为空操作：块已存在于同一 PostgreSQL
 数据库中（ChunkRepository 负责写入操作，触发器维护 search_tsv，
@@ -23,7 +25,9 @@ SELECT c.id::text AS chunk_id,
        c.product, c.version, c.chunk_type::text AS chunk_type,
        c.heading_path
 FROM chunks c
-JOIN documents d ON d.id = c.document_id AND d.deleted_at IS NULL,
+JOIN documents d ON d.id = c.document_id
+     AND d.deleted_at IS NULL
+     AND d.status = 'READY',
      plainto_tsquery('simple', :query) q
 WHERE c.deleted_at IS NULL
   AND c.is_parent = false
@@ -43,7 +47,9 @@ SELECT c.id::text AS chunk_id,
        c.product, c.version, c.chunk_type::text AS chunk_type,
        c.heading_path
 FROM chunks c
-JOIN documents d ON d.id = c.document_id AND d.deleted_at IS NULL
+JOIN documents d ON d.id = c.document_id
+     AND d.deleted_at IS NULL
+     AND d.status = 'READY'
 WHERE c.deleted_at IS NULL
   AND c.is_parent = false
   AND c.knowledge_base_id = :kb_id

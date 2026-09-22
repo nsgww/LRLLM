@@ -22,6 +22,7 @@ from app.api.routers import (
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.logging import setup_logging
+from app.core.startup import validate_embedding_consistency
 from app.embedding.providers.openai import OpenAIEmbedding
 from app.llm.prompts.loader import PromptLoader
 from app.llm.providers.openai import OpenAILLM
@@ -35,7 +36,7 @@ from app.services.ingestion_service import IngestionService
 from app.services.knowledge_base_service import KnowledgeBaseService
 from app.services.query_service import QueryService
 from app.storage.keyword.store import PostgresKeywordStore
-from app.storage.postgres.db import get_session_factory, init_engine
+from app.storage.postgres.db import dispose_engine, get_session_factory, init_engine
 from app.storage.qdrant.store import QdrantVectorStore
 
 
@@ -55,6 +56,7 @@ def create_app() -> FastAPI:
         )
         await vector_store.ensure_collection()
         await vector_store.validate_dimension()
+        await validate_embedding_consistency(session_factory, settings)
 
         embedding = OpenAIEmbedding(
             model=settings.embedding_model,
@@ -97,11 +99,15 @@ def create_app() -> FastAPI:
             evidence_checker=EvidenceChecker(llm, prompts),
             context_builder=ContextBuilder(settings),
         )
-        yield
-        await llm.aclose()
-        await embedding.aclose()
-        if reranker is not None:
-            await reranker.aclose()
+        try:
+            yield
+        finally:
+            await llm.aclose()
+            await embedding.aclose()
+            if reranker is not None:
+                await reranker.aclose()
+            await vector_store.aclose()
+            await dispose_engine()
 
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
 

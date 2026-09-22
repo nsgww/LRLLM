@@ -28,3 +28,12 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
     if _session_factory is None:
         raise RuntimeError("engine not initialized; call init_engine() first")
     return _session_factory
+
+
+async def dispose_engine() -> None:
+    """Release the connection pool on shutdown."""
+    global _engine, _session_factory
+    if _engine is not None:
+        await _engine.dispose()
+    _engine = None
+    _session_factory = None

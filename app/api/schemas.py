@@ -1,8 +1,19 @@
 """Request / response schemas."""
 
 from datetime import datetime
+from typing import Generic, TypeVar
 
 from pydantic import BaseModel
+
+T = TypeVar("T")
+
+
+class Page(BaseModel, Generic[T]):
+    """Cursor pagination envelope (05-api-spec section 12)."""
+
+    items: list[T]
+    next_cursor: str | None = None
+    has_more: bool = False
 
 
 class KnowledgeBaseCreate(BaseModel):

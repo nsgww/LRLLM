@@ -3,23 +3,67 @@
 Upload/Sync only create jobs; this worker executes the pipeline.
 v0.1 assumes a single worker instance (no job-claiming race handling).
 
+Resilience (04 section 34 / 09 section 11):
+- RUNNING jobs left behind by a crashed worker are reclaimed and retried;
+- transient failures are requeued with backoff up to `ingestion_max_attempts`.
+
 Run: python -m workers.ingestion_worker
 """
 
 import asyncio
 import logging
+from datetime import UTC, datetime, timedelta
 
-from app.core.config import get_settings
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.core.config import Settings, get_settings
 from app.core.logging import setup_logging
+from app.core.startup import validate_embedding_consistency
+from app.domain.ingestion import JobStatus
 from app.embedding.providers.openai import OpenAIEmbedding
 from app.ingestion.pipeline import IngestionPipeline
+from app.services.cleanup_service import CleanupService
 from app.storage.postgres.db import get_session_factory, init_engine
 from app.storage.postgres.repositories import IngestionJobRepository
 from app.storage.qdrant.store import QdrantVectorStore
 
 logger = logging.getLogger(__name__)
 
-POLL_INTERVAL_SECONDS = 2.0
+
+async def reclaim_stale_jobs(
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+) -> None:
+    """Recover jobs stuck in RUNNING (worker crashed mid-processing)."""
+    cutoff = datetime.now(UTC) - timedelta(seconds=settings.ingestion_stale_job_timeout_seconds)
+    async with session_factory() as session:
+        jobs = IngestionJobRepository(session)
+        stale = await jobs.list_stale_running(cutoff)
+        for job in stale:
+            attempts = job.attempt_count or 0
+            if attempts < settings.ingestion_max_attempts:
+                backoff = settings.ingestion_retry_backoff_seconds * max(attempts, 1)
+                await jobs.requeue(
+                    str(job.id), datetime.now(UTC) + timedelta(seconds=backoff)
+                )
+                logger.warning(
+                    "reclaimed stale job %s (attempt %s/%s), retrying after %ss",
+                    job.id,
+                    attempts,
+                    settings.ingestion_max_attempts,
+                    backoff,
+                )
+            else:
+                await jobs.update(
+                    str(job.id),
+                    JobStatus.FAILED,
+                    stage="TIMEOUT",
+                    error_code="JOB_TIMEOUT",
+                    error_message="job stayed RUNNING beyond the stale timeout",
+                )
+                logger.error("job %s exhausted attempts after worker crash", job.id)
+        if stale:
+            await session.commit()
 
 
 async def run() -> None:
@@ -27,6 +71,7 @@ async def run() -> None:
     setup_logging()
     init_engine(settings.postgres_dsn)
     session_factory = get_session_factory()
+    await validate_embedding_consistency(session_factory, settings)
 
     vector_store = QdrantVectorStore(
         settings.qdrant_url,
@@ -49,26 +94,40 @@ async def run() -> None:
         embedding=embedding,
         settings=settings,
     )
+    cleanup = CleanupService(session_factory, vector_store, settings.cleanup_batch_size)
 
     logger.info("ingestion worker started")
-    while True:
-        async with session_factory() as session:
-            jobs = await IngestionJobRepository(session).list_pending()
-        for job in jobs:
-            try:
-                result = await pipeline.process(str(job.id))
+    try:
+        await cleanup.reconcile_orphans()
+        while True:
+            await reclaim_stale_jobs(session_factory, settings)
+            report = await cleanup.run_once()
+            if report.chunks_purged or report.documents_purged:
                 logger.info(
-                    "job %s -> %s (sections=%s chunks=%s embeddings=%s skipped=%s)",
-                    result.job_id,
-                    result.status.value,
-                    result.section_count,
-                    result.chunk_count,
-                    result.embedding_count,
-                    result.skipped,
+                    "cleanup purged chunks=%s documents=%s",
+                    report.chunks_purged,
+                    report.documents_purged,
                 )
-            except Exception:
-                logger.exception("job %s failed", job.id)
-        await asyncio.sleep(POLL_INTERVAL_SECONDS)
+            async with session_factory() as session:
+                jobs = await IngestionJobRepository(session).list_pending()
+            for job in jobs:
+                try:
+                    result = await pipeline.process(str(job.id))
+                    logger.info(
+                        "job %s -> %s (sections=%s chunks=%s embeddings=%s skipped=%s)",
+                        result.job_id,
+                        result.status.value,
+                        result.section_count,
+                        result.chunk_count,
+                        result.embedding_count,
+                        result.skipped,
+                    )
+                except Exception:
+                    logger.exception("job %s failed", job.id)
+            await asyncio.sleep(settings.ingestion_poll_interval_seconds)
+    finally:
+        await embedding.aclose()
+        await vector_store.aclose()
 
 
 if __name__ == "__main__":

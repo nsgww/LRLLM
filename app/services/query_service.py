@@ -6,6 +6,7 @@
 并记录在检索轨迹中。
 """
 
+import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -39,6 +40,8 @@ from app.storage.postgres.repositories import (
     QueryTraceRepository,
 )
 from app.tracing.query_trace import QueryTraceBuilder
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -147,15 +150,17 @@ class QueryService:
                 data={"error": {"code": exc.code, "stage": exc.stage, "message": exc.message}},
             )
         except Exception as exc:  # unclassified: still never a bare RAG_ERROR
-            trace.error_stage = QueryStage.LLM_GENERATION.value
+            stage = trace.current_stage or QueryStage.LLM_GENERATION.value
+            trace.error_stage = stage
             trace.latency_ms = int((time.monotonic() - started) * 1000)
+            logger.exception("query failed at stage %s: %s", stage, exc)
             await self._save_trace(trace)
             yield QueryEvent(
                 event="error",
                 data={
                     "error": {
                         "code": "INTERNAL_ERROR",
-                        "stage": QueryStage.LLM_GENERATION.value,
+                        "stage": stage,
                         "message": str(exc),
                     }
                 },
@@ -181,6 +186,7 @@ class QueryService:
         ]
 
         ranked_all: list[RankedChunk] = []
+        trace.current_stage = QueryStage.METADATA_FILTER.value
         for sq in sub_queries:
             filters = build_metadata_filter(knowledge_base_id, understanding, sq)
             trace.metadata_filters.append(
@@ -191,6 +197,7 @@ class QueryService:
                     "version": filters.version,
                 }
             )
+            trace.current_stage = QueryStage.VECTOR_RETRIEVAL.value
             retrieval = await self._hybrid.retrieve(sq.query, filters, strategy)
             degraded = []
             if retrieval.vector_degraded:
@@ -204,15 +211,18 @@ class QueryService:
                 retrieval.candidates,
                 degraded,
             )
+            trace.current_stage = QueryStage.RERANKING.value
             outcome = await self._rerank.rerank(sq.query, retrieval.candidates, sub_query_id=sq.id)
             trace.reranker_fallback = trace.reranker_fallback or outcome.fallback
             trace.record_reranked(sq.id, outcome.chunks)
             ranked_all.extend(outcome.chunks)
 
+        trace.current_stage = QueryStage.EVIDENCE_CHECK.value
         evidence = await self._evidence.check(rewritten, ranked_all)
         trace.record_evidence(evidence)
         yield QueryEvent(event="evidence_status", data={"status": evidence.status.value})
 
+        trace.current_stage = QueryStage.CONTEXT_BUILDING.value
         built = self._context.build(
             ranked_all,
             version_specified=understanding.version is not None,
@@ -256,6 +266,7 @@ class QueryService:
         known: list[dict],
         trace: QueryTraceBuilder,
     ) -> QueryUnderstanding:
+        trace.current_stage = QueryStage.QUERY_UNDERSTANDING.value
         template = await self._prompts.get("query_understanding")
         trace.record_prompt(template)
         rendered = PromptLoader.render(
@@ -296,6 +307,7 @@ class QueryService:
         conversation_context: str,
         trace: QueryTraceBuilder,
     ) -> str:
+        trace.current_stage = QueryStage.QUERY_REWRITE.value
         template = await self._prompts.get("query_rewrite")
         trace.record_prompt(template)
         rendered = PromptLoader.render(
@@ -336,6 +348,7 @@ class QueryService:
                     version=understanding.version,
                 )
             ]
+        trace.current_stage = QueryStage.QUERY_DECOMPOSITION.value
         template = await self._prompts.get("query_decomposition")
         trace.record_prompt(template)
         rendered = PromptLoader.render(
@@ -375,6 +388,7 @@ class QueryService:
         trace: QueryTraceBuilder,
         answer_parts: list[str],
     ) -> AsyncIterator[QueryEvent]:
+        trace.current_stage = QueryStage.LLM_GENERATION.value
         template = await self._prompts.get("answer_generation")
         trace.record_prompt(template)
         rendered = PromptLoader.render(
@@ -397,6 +411,7 @@ class QueryService:
         trace: QueryTraceBuilder,
         answer_parts: list[str],
     ) -> AsyncIterator[QueryEvent]:
+        trace.current_stage = QueryStage.LLM_GENERATION.value
         template = await self._prompts.get("general_answer")
         trace.record_prompt(template)
         rendered = PromptLoader.render(
@@ -426,7 +441,8 @@ class QueryService:
                 await QueryTraceRepository(session).create(trace.to_row())
                 await session.commit()
         except Exception:
-            pass  # tracing must never break the request path
+            # tracing must never break the request path, but it must be visible
+            logger.exception("failed to persist query trace for answer %s", trace.answer_id)
 
     async def get_answer_evidence(self, answer_id: str) -> dict:
         """On-demand evidence for an answer (05-api-spec section 9).
@@ -448,12 +464,8 @@ class QueryService:
             chunk_ids = [c["chunk_id"] for c in selected]
             chunk_rows = {str(r.id): r for r in await ChunkRepository(session).get_many(chunk_ids)}
             doc_ids = {c["document_id"] for c in selected}
-            documents = DocumentRepository(session)
-            doc_titles = {}
-            for doc_id in doc_ids:
-                doc = await documents.get(doc_id)
-                if doc is not None:
-                    doc_titles[doc_id] = doc.title
+            doc_rows = await DocumentRepository(session).get_many(list(doc_ids))
+            doc_titles = {str(d.id): d.title for d in doc_rows}
 
         evidence = []
         for item in selected:

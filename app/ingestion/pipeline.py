@@ -11,6 +11,7 @@
 import hashlib
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -46,6 +47,18 @@ _STAGE_ERROR_CODES = {
     "DB": IngestionErrorCode.DATABASE_FAILED,
 }
 
+# Deterministic failures will fail again on retry; do not burn attempts on them.
+_TERMINAL_ERROR_CODES = {
+    IngestionErrorCode.FILE_INVALID.value,
+    IngestionErrorCode.FILE_UNSUPPORTED.value,
+    IngestionErrorCode.FILE_EMPTY.value,
+    IngestionErrorCode.PARSER_FAILED.value,
+    IngestionErrorCode.METADATA_INVALID.value,
+    IngestionErrorCode.METADATA_CONFLICT.value,
+    IngestionErrorCode.SECTION_PARSE_FAILED.value,
+    IngestionErrorCode.CHUNK_FAILED.value,
+}
+
 
 @dataclass
 class IngestionResult:
@@ -77,6 +90,7 @@ class IngestionPipeline:
 
     async def process(self, job_id: str) -> IngestionResult:
         stage = "DB"
+        attempt = 1
         try:
             async with self._session_factory() as session:
                 jobs = IngestionJobRepository(session)
@@ -96,6 +110,7 @@ class IngestionPipeline:
                     )
 
                 document_id = str(document.id)
+                attempt = (job.attempt_count or 0) + 1
                 result = IngestionResult(job_id=job_id, document_id=document_id, status=JobStatus.RUNNING)
 
                 fingerprint = _processing_fingerprint(
@@ -114,7 +129,9 @@ class IngestionPipeline:
                     result.skipped = True
                     return result
 
-                await jobs.update(job_id, JobStatus.RUNNING, stage="PARSE")
+                await jobs.update(
+                    job_id, JobStatus.RUNNING, stage="PARSE", attempt_count=attempt
+                )
                 await documents.update_status(document_id, DocumentStatus.PROCESSING)
                 await session.commit()
 
@@ -159,17 +176,32 @@ class IngestionPipeline:
                 stage = "SECTION"
                 sections_repo = SectionRepository(session)
                 chunks_repo = ChunkRepository(session)
-                sections = _build_sections(ast.blocks, document_id)
+                sections, parent_offsets, section_paths = _build_sections(
+                    ast.blocks, document_id
+                )
                 await sections_repo.delete_by_document(document_id)
                 section_ids = await sections_repo.bulk_create(sections)
+                # Parent ids only exist after the flush, so resolve them here
+                # instead of at construction time (09 section 5 hierarchy).
+                await sections_repo.update_parents(
+                    [
+                        (section_ids[index], section_ids[parent_index])
+                        for index, parent_index in enumerate(parent_offsets)
+                        if parent_index is not None
+                    ]
+                )
                 section_id_by_path = {
-                    tuple(s.heading_path.split(" / ")): sid
-                    for s, sid in zip(sections, section_ids, strict=True)
+                    path: section_id
+                    for path, section_id in zip(section_paths, section_ids, strict=True)
                 }
 
                 # CHUNK
                 stage = "CHUNK"
                 old_chunk_ids = await chunks_repo.delete_by_document(document_id)
+                # Drop the previous vectors now: if a later stage fails there is
+                # no old point left to become an orphan (09 section 11). The
+                # document is PROCESSING, so nothing is served in the meantime.
+                await self._vector_store.delete(old_chunk_ids)
                 semantic_chunks = self._chunker.chunk(ast)
                 chunks = [
                     _to_chunk(
@@ -201,7 +233,6 @@ class IngestionPipeline:
 
                 # VECTOR_INDEX
                 stage = "VECTOR_INDEX"
-                await self._vector_store.delete(old_chunk_ids)
                 await self._vector_store.upsert(
                     [
                         VectorPoint(
@@ -214,6 +245,7 @@ class IngestionPipeline:
                                 "chunk_id": chunk_id,
                                 "product": resolved.product,
                                 "version": resolved.version,
+                                "doc_class": resolved.doc_class,
                                 "chunk_type": chunk.chunk_type.value,
                             },
                         )
@@ -242,29 +274,51 @@ class IngestionPipeline:
                 return result
 
         except IngestionError as exc:
-            await self._fail(job_id, exc.code, exc.message, exc.stage)
+            await self._handle_failure(job_id, exc.code, exc.message, exc.stage, attempt)
             raise
         except Exception as exc:
             code = _STAGE_ERROR_CODES.get(stage, IngestionErrorCode.DATABASE_FAILED)
-            await self._fail(job_id, code.value, str(exc), stage)
+            await self._handle_failure(job_id, code.value, str(exc), stage, attempt)
             raise IngestionError(code, str(exc), stage) from exc
 
-    async def _fail(self, job_id: str, code: str, message: str, stage: str) -> None:
-        logger.error("ingestion job %s failed at %s: %s %s", job_id, stage, code, message)
+    async def _handle_failure(
+        self, job_id: str, code: str, message: str, stage: str, attempt: int
+    ) -> None:
+        """Requeue transient failures (bounded by max attempts), else fail hard."""
+        max_attempts = self._settings.ingestion_max_attempts
+        retryable = attempt < max_attempts and code not in _TERMINAL_ERROR_CODES
+        logger.error(
+            "ingestion job %s failed at %s (attempt %s/%s): %s %s%s",
+            job_id,
+            stage,
+            attempt,
+            max_attempts,
+            code,
+            message,
+            " -> will retry" if retryable else " -> terminal",
+        )
         async with self._session_factory() as session:
             jobs = IngestionJobRepository(session)
             documents = DocumentRepository(session)
             job = await jobs.get(job_id)
             if job is not None:
-                await jobs.update(
-                    job_id, JobStatus.FAILED, stage=stage, error_code=code, error_message=message
-                )
-                status = (
-                    DocumentStatus.CONFLICT
-                    if code == IngestionErrorCode.METADATA_CONFLICT.value
-                    else DocumentStatus.FAILED
-                )
-                await documents.update_status(str(job.document_id), status, code, message)
+                if retryable:
+                    backoff = self._settings.ingestion_retry_backoff_seconds * attempt
+                    await jobs.requeue(job_id, datetime.now(UTC) + timedelta(seconds=backoff))
+                else:
+                    await jobs.update(
+                        job_id,
+                        JobStatus.FAILED,
+                        stage=stage,
+                        error_code=code,
+                        error_message=message,
+                    )
+                    status = (
+                        DocumentStatus.CONFLICT
+                        if code == IngestionErrorCode.METADATA_CONFLICT.value
+                        else DocumentStatus.FAILED
+                    )
+                    await documents.update_status(str(job.document_id), status, code, message)
             await session.commit()
 
 
@@ -279,11 +333,21 @@ def _processing_fingerprint(
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def _build_sections(blocks: list[ASTBlock], document_id: str) -> list[Section]:
+def _build_sections(
+    blocks: list[ASTBlock], document_id: str
+) -> tuple[list[Section], list[int | None], list[tuple[str, ...]]]:
     """Each heading becomes a section; line range extends to the next
-    heading of the same or higher level (04 section 13)."""
+    heading of the same or higher level (04 section 13).
+
+    Returns the sections plus, in parallel, each section's parent index and
+    its structural heading path. Parents are expressed as indices because
+    database ids do not exist until the rows are flushed; comparing the raw
+    path tuples avoids the ambiguity of splitting a " / "-joined string.
+    """
     headings = [b for b in blocks if b.type == BlockType.HEADING]
     sections: list[Section] = []
+    parent_offsets: list[int | None] = []
+    section_paths: list[tuple[str, ...]] = []
     for order, block in enumerate(headings):
         line_end = block.line_end
         for later in headings[order + 1 :]:
@@ -293,26 +357,29 @@ def _build_sections(blocks: list[ASTBlock], document_id: str) -> list[Section]:
         else:
             line_end = max((b.line_end for b in blocks), default=block.line_end)
 
-        parent_path = block.heading_path[:-1]
-        parent_id = None
-        for s in reversed(sections):
-            if s.heading_path.split(" / ") == parent_path:
-                parent_id = s.id
+        path = tuple(block.heading_path)
+        parent_path = path[:-1]
+        parent_index = None
+        for index in range(len(section_paths) - 1, -1, -1):
+            if section_paths[index] == parent_path:
+                parent_index = index
                 break
 
         sections.append(
             Section(
                 document_id=document_id,
                 heading=block.content,
-                heading_path=" / ".join(block.heading_path),
+                heading_path=" / ".join(path),
                 level=block.level or 1,
                 section_order=order,
                 line_start=block.line_start,
                 line_end=line_end,
-                parent_section_id=parent_id,
+                parent_section_id=None,
             )
         )
-    return sections
+        parent_offsets.append(parent_index)
+        section_paths.append(path)
+    return sections, parent_offsets, section_paths
 
 
 def _find_section_id(heading_path: list[str], by_path: dict[tuple[str, ...], str]) -> str | None:

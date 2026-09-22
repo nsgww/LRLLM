@@ -1,10 +1,16 @@
 """Knowledge base management (05-api-spec section 5)."""
 
+from datetime import datetime
+
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.errors import AppError
 from app.storage.postgres.orm import KnowledgeBaseRow
-from app.storage.postgres.repositories import KnowledgeBaseRepository
+from app.storage.postgres.repositories import (
+    ChunkRepository,
+    DocumentRepository,
+    KnowledgeBaseRepository,
+)
 
 
 class KnowledgeBaseService:
@@ -28,12 +34,19 @@ class KnowledgeBaseService:
             )
         return row
 
-    async def list(self, limit: int = 50) -> list[KnowledgeBaseRow]:
+    async def list(
+        self, limit: int = 50, cursor: tuple[datetime, str] | None = None
+    ) -> tuple[list[KnowledgeBaseRow], bool]:
         async with self._session_factory() as session:
-            return await KnowledgeBaseRepository(session).list(limit)
+            return await KnowledgeBaseRepository(session).list(limit, cursor)
 
     async def soft_delete(self, kb_id: str) -> None:
+        """Soft delete the KB and cascade to Document/Chunk. Vectors and
+        physical rows are removed asynchronously by CleanupService
+        (05 section 5, 09 section 11)."""
         await self.get(kb_id)
         async with self._session_factory() as session:
+            await ChunkRepository(session).soft_delete_by_kb(kb_id)
+            await DocumentRepository(session).soft_delete_by_kb(kb_id)
             await KnowledgeBaseRepository(session).soft_delete(kb_id)
             await session.commit()

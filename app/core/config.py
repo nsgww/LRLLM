@@ -68,6 +68,15 @@ class Settings(BaseSettings):
     # prompt loading
     prompt_cache_ttl_seconds: int = 5
 
+    # ingestion worker resilience
+    ingestion_max_attempts: int = 3
+    ingestion_retry_backoff_seconds: int = 30
+    ingestion_stale_job_timeout_seconds: int = 300
+    ingestion_poll_interval_seconds: float = 2.0
+
+    # background physical cleanup
+    cleanup_batch_size: int = 200
+
 
 def get_settings() -> Settings:
     return Settings()

@@ -2,7 +2,8 @@
 
 from fastapi import APIRouter, Request
 
-from app.api.schemas import KnowledgeBaseCreate, KnowledgeBaseOut
+from app.api.pagination import decode_cursor, next_cursor
+from app.api.schemas import KnowledgeBaseCreate, KnowledgeBaseOut, Page
 
 router = APIRouter(tags=["knowledge-bases"])
 
@@ -22,10 +23,16 @@ async def create_kb(body: KnowledgeBaseCreate, request: Request) -> KnowledgeBas
     return _out(row)
 
 
-@router.get("/knowledge-bases", response_model=list[KnowledgeBaseOut])
-async def list_kbs(request: Request, limit: int = 50) -> list[KnowledgeBaseOut]:
-    rows = await request.app.state.kb_service.list(limit)
-    return [_out(r) for r in rows]
+@router.get("/knowledge-bases", response_model=Page[KnowledgeBaseOut])
+async def list_kbs(request: Request, limit: int = 50, cursor: str | None = None) -> Page[KnowledgeBaseOut]:
+    rows, has_more = await request.app.state.kb_service.list(
+        limit, decode_cursor(cursor) if cursor else None
+    )
+    return Page[KnowledgeBaseOut](
+        items=[_out(r) for r in rows],
+        next_cursor=next_cursor(rows, has_more),
+        has_more=has_more,
+    )
 
 
 @router.get("/knowledge-bases/{kb_id}", response_model=KnowledgeBaseOut)

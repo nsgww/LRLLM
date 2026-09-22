@@ -2,7 +2,9 @@
 
 from fastapi import APIRouter, Request
 
-from app.api.schemas import IngestionJobOut
+from app.api.pagination import decode_cursor, next_cursor
+from app.api.schemas import IngestionJobOut, Page
+from app.domain.ingestion import JobStatus
 
 router = APIRouter(tags=["ingestion-jobs"])
 
@@ -29,11 +31,19 @@ async def get_job(job_id: str, request: Request) -> IngestionJobOut:
     return _job_out(await request.app.state.ingestion_service.get_job(job_id))
 
 
-@router.get("/ingestion-jobs", response_model=list[IngestionJobOut])
+@router.get("/ingestion-jobs", response_model=Page[IngestionJobOut])
 async def list_jobs(
     request: Request,
     document_id: str | None = None,
+    status: JobStatus | None = None,
     limit: int = 50,
-) -> list[IngestionJobOut]:
-    rows = await request.app.state.ingestion_service.list_jobs(document_id, limit)
-    return [_job_out(r) for r in rows]
+    cursor: str | None = None,
+) -> Page[IngestionJobOut]:
+    rows, has_more = await request.app.state.ingestion_service.list_jobs(
+        document_id, status, limit, decode_cursor(cursor) if cursor else None
+    )
+    return Page[IngestionJobOut](
+        items=[_job_out(r) for r in rows],
+        next_cursor=next_cursor(rows, has_more),
+        has_more=has_more,
+    )

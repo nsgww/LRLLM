@@ -76,6 +76,8 @@ app/
 ├── core/                    # 横切基础
 │   ├── config.py            #   全部配置（RAG_ 前缀环境变量），检索参数只能在这里调
 │   ├── errors.py            #   错误分类唯一来源：QueryStage / IngestionErrorCode / AppError
+│   ├── ids.py               #   UUID 解析（非法输入转 400，而非 500）
+│   ├── startup.py           #   启动一致性校验（Embedding 版本与索引一致）
 │   ├── versions.py          #   PARSER_VERSION / CHUNKER_VERSION 常量
 │   └── logging.py           #   日志初始化
 ├── domain/                  # 领域模型（纯 dataclass，零框架依赖）
@@ -85,6 +87,7 @@ app/
 │   └── retrieval/                 # MetadataFilter / RetrievalHit / RankedChunk / EvidenceResult
 ├── api/                     # HTTP 层（只做协议转换）
 │   ├── deps.py              #   依赖注入：从 X-Knowledge-Base-ID 头解析作用域
+│   ├── pagination.py        #   Cursor 分页编解码（05 号文档 12 节）
 │   ├── schemas.py           #   请求 / 响应模型
 │   └── routers/             #   knowledge_bases / documents / ingestion_jobs /
 │                            #   query（SSE 流式）/ answers / conversations
@@ -92,6 +95,7 @@ app/
 │   ├── knowledge_base_service.py
 │   ├── ingestion_service.py #   上传 / 重建索引：建 Job，不写向量
 │   ├── query_service.py     #   查询主链路编排（02 号文档全流程）
+│   ├── cleanup_service.py   #   软删除物理清理与孤儿向量对账（09 号文档 11 节）
 │   └── conversation_service.py
 ├── ingestion/               # 入库管线实现（04 号文档）
 │   ├── parsers/markdown.py  #   Markdown → AST：front matter、heading_path、行号
@@ -119,13 +123,17 @@ app/
 │   ├── postgres/            #   引擎、ORM（与 09 号 DDL 对齐）、Repository
 │   ├── qdrant/store.py      #   向量库：Collection 管理、filter 下推、维度校验
 │   └── keyword/store.py     #   关键词检索：FTS（simple）+ pg_trgm 兜底
-└── tracing/query_trace.py   # QueryTrace 构建器，只写 query_traces 表，不对 API 暴露
+├── tracing/query_trace.py   # QueryTrace 构建器，只写 query_traces 表，不对 API 暴露
+├── evaluation/              # 07 号文档：接口契约（interfaces.py）+ 可脚本指标（scoring.py）
+└── tools/                   # 预留目录，v0.1 不实现 Tool Router
 ```
 
 ## workers/ — 后台进程
 
 - `ingestion_worker.py`：入库 Worker。轮询 PENDING 状态的 Job 并执行完整入库管线
-  （上传只创建 Job，不做实际处理）。v0.1 假定单实例；Redis 已预留，暂未消费。
+  （上传只创建 Job，不做实际处理）。具备崩溃恢复与重试：启动及轮询时回收超时的
+  `RUNNING` Job，瞬时失败按 `RAG_INGESTION_MAX_ATTEMPTS` 退避重试；同时周期执行
+  软删除数据的物理清理与孤儿向量对账。v0.1 假定单实例；Redis 已预留，暂未消费。
 
 ## scripts/ — 一次性脚本
 
@@ -163,6 +171,8 @@ tests/
 - `POST /v1/knowledge-bases` / `POST /v1/documents` — 建库与上传文档
 - `GET /v1/ingestion-jobs/{id}` — 入库进度与分阶段错误
 - `GET /v1/answers/{answer_id}/evidence` — 回答的证据引用
+- 列表接口（knowledge-bases / documents / ingestion-jobs / conversations messages）统一
+  Cursor 分页，返回 `{ items, next_cursor, has_more }`；`ingestion-jobs` 支持 `?status=`
 - Retrieval Trace 只进 `query_traces` 表，公开 API 不暴露
 
 完整契约见 `docs/private-knowledge-rag/05-api-spec.md`。

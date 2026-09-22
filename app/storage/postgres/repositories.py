@@ -4,8 +4,9 @@ and scope filters (knowledge_base_id).
 
 from __future__ import annotations
 
-import uuid
 from datetime import UTC, datetime
+
+from app.core.ids import parse_uuid
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +28,33 @@ from app.storage.postgres.orm import (
 )
 
 
+def _apply_cursor(
+    stmt,
+    model,
+    cursor: tuple[datetime, str] | None,
+    *,
+    descending: bool,
+):
+    """Keyset pagination on (created_at, id); ordering must match `descending`."""
+    if cursor is None:
+        return stmt
+    created_at, last_id = cursor
+    last_uuid = parse_uuid(last_id)
+    if descending:
+        return stmt.where(
+            sa.or_(
+                model.created_at < created_at,
+                sa.and_(model.created_at == created_at, model.id < last_uuid),
+            )
+        )
+    return stmt.where(
+        sa.or_(
+            model.created_at > created_at,
+            sa.and_(model.created_at == created_at, model.id > last_uuid),
+        )
+    )
+
+
 class KnowledgeBaseRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -39,24 +67,29 @@ class KnowledgeBaseRepository:
 
     async def get(self, kb_id: str) -> KnowledgeBaseRow | None:
         stmt = sa.select(KnowledgeBaseRow).where(
-            KnowledgeBaseRow.id == uuid.UUID(kb_id),
+            KnowledgeBaseRow.id == parse_uuid(kb_id),
             KnowledgeBaseRow.deleted_at.is_(None),
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
-    async def list(self, limit: int = 50) -> list[KnowledgeBaseRow]:
+    async def list(
+        self, limit: int = 50, cursor: tuple[datetime, str] | None = None
+    ) -> tuple[list[KnowledgeBaseRow], bool]:
         stmt = (
             sa.select(KnowledgeBaseRow)
             .where(KnowledgeBaseRow.deleted_at.is_(None))
-            .order_by(KnowledgeBaseRow.created_at.desc())
-            .limit(limit)
+            .order_by(KnowledgeBaseRow.created_at.desc(), KnowledgeBaseRow.id.desc())
+            .limit(limit + 1)
         )
-        return list((await self._session.execute(stmt)).scalars().all())
+        stmt = _apply_cursor(stmt, KnowledgeBaseRow, cursor, descending=True)
+        rows = list((await self._session.execute(stmt)).scalars().all())
+        has_more = len(rows) > limit
+        return rows[:limit], has_more
 
     async def soft_delete(self, kb_id: str) -> None:
         await self._session.execute(
             sa.update(KnowledgeBaseRow)
-            .where(KnowledgeBaseRow.id == uuid.UUID(kb_id))
+            .where(KnowledgeBaseRow.id == parse_uuid(kb_id))
             .values(deleted_at=datetime.now(UTC))
         )
 
@@ -67,7 +100,7 @@ class DocumentRepository:
 
     async def create(self, doc: Document) -> DocumentRow:
         row = DocumentRow(
-            knowledge_base_id=uuid.UUID(doc.knowledge_base_id),
+            knowledge_base_id=parse_uuid(doc.knowledge_base_id),
             title=doc.title,
             doc_class=doc.doc_class,
             source=doc.source,
@@ -88,30 +121,38 @@ class DocumentRepository:
 
     async def get(self, document_id: str) -> DocumentRow | None:
         stmt = sa.select(DocumentRow).where(
-            DocumentRow.id == uuid.UUID(document_id),
+            DocumentRow.id == parse_uuid(document_id),
             DocumentRow.deleted_at.is_(None),
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
     async def get_by_hash(self, kb_id: str, content_hash: str) -> DocumentRow | None:
         stmt = sa.select(DocumentRow).where(
-            DocumentRow.knowledge_base_id == uuid.UUID(kb_id),
+            DocumentRow.knowledge_base_id == parse_uuid(kb_id),
             DocumentRow.content_hash == content_hash,
             DocumentRow.deleted_at.is_(None),
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
-    async def list(self, kb_id: str, limit: int = 50) -> list[DocumentRow]:
+    async def list(
+        self,
+        kb_id: str,
+        limit: int = 50,
+        cursor: tuple[datetime, str] | None = None,
+    ) -> tuple[list[DocumentRow], bool]:
         stmt = (
             sa.select(DocumentRow)
             .where(
-                DocumentRow.knowledge_base_id == uuid.UUID(kb_id),
+                DocumentRow.knowledge_base_id == parse_uuid(kb_id),
                 DocumentRow.deleted_at.is_(None),
             )
-            .order_by(DocumentRow.created_at.desc())
-            .limit(limit)
+            .order_by(DocumentRow.created_at.desc(), DocumentRow.id.desc())
+            .limit(limit + 1)
         )
-        return list((await self._session.execute(stmt)).scalars().all())
+        stmt = _apply_cursor(stmt, DocumentRow, cursor, descending=True)
+        rows = list((await self._session.execute(stmt)).scalars().all())
+        has_more = len(rows) > limit
+        return rows[:limit], has_more
 
     async def update_status(
         self,
@@ -122,7 +163,7 @@ class DocumentRepository:
     ) -> None:
         await self._session.execute(
             sa.update(DocumentRow)
-            .where(DocumentRow.id == uuid.UUID(document_id))
+            .where(DocumentRow.id == parse_uuid(document_id))
             .values(
                 status=status,
                 error_code=error_code,
@@ -134,16 +175,72 @@ class DocumentRepository:
     async def soft_delete(self, document_id: str) -> None:
         await self._session.execute(
             sa.update(DocumentRow)
-            .where(DocumentRow.id == uuid.UUID(document_id))
+            .where(DocumentRow.id == parse_uuid(document_id))
             .values(deleted_at=datetime.now(UTC))
         )
+
+    async def soft_delete_by_kb(self, kb_id: str) -> None:
+        """Cascade soft delete when a knowledge base is removed (05 section 5)."""
+        await self._session.execute(
+            sa.update(DocumentRow)
+            .where(
+                DocumentRow.knowledge_base_id == parse_uuid(kb_id),
+                DocumentRow.deleted_at.is_(None),
+            )
+            .values(deleted_at=datetime.now(UTC))
+        )
+
+    async def list_purgeable_ids(self, limit: int = 200) -> list[str]:
+        """Soft-deleted documents whose chunks are all physically gone, so the
+        row (and its cascaded sections/jobs) can be purged without leaving
+        Qdrant points unreferenced."""
+        chunk_exists = (
+            sa.select(ChunkRow.id).where(ChunkRow.document_id == DocumentRow.id).exists()
+        )
+        stmt = (
+            sa.select(DocumentRow.id)
+            .where(DocumentRow.deleted_at.is_not(None), ~chunk_exists)
+            .limit(limit)
+        )
+        return [str(r) for r in (await self._session.execute(stmt)).scalars().all()]
+
+    async def hard_delete_ids(self, document_ids: list[str]) -> None:
+        if not document_ids:
+            return
+        await self._session.execute(
+            sa.delete(DocumentRow).where(
+                DocumentRow.id.in_([parse_uuid(i) for i in document_ids])
+            )
+        )
+
+    async def get_many(self, document_ids: list[str]) -> list[DocumentRow]:
+        if not document_ids:
+            return []
+        stmt = sa.select(DocumentRow).where(
+            DocumentRow.id.in_([parse_uuid(i) for i in document_ids]),
+            DocumentRow.deleted_at.is_(None),
+        )
+        return list((await self._session.execute(stmt)).scalars().all())
+
+    async def distinct_embedding_versions(self) -> list[str]:
+        """Indexed embedding model versions, for the startup consistency check
+        (06 section 4): the query-time model must match what was indexed."""
+        stmt = (
+            sa.select(DocumentRow.embedding_model_version)
+            .where(
+                DocumentRow.deleted_at.is_(None),
+                DocumentRow.embedding_model_version.is_not(None),
+            )
+            .distinct()
+        )
+        return [v for v in (await self._session.execute(stmt)).scalars().all() if v]
 
     async def distinct_product_versions(self, kb_id: str) -> list[dict]:
         """Known products/versions for query_understanding grounding (08 section 4.1)."""
         stmt = (
             sa.select(DocumentRow.product, DocumentRow.version)
             .where(
-                DocumentRow.knowledge_base_id == uuid.UUID(kb_id),
+                DocumentRow.knowledge_base_id == parse_uuid(kb_id),
                 DocumentRow.deleted_at.is_(None),
                 DocumentRow.product.is_not(None),
             )
@@ -164,7 +261,7 @@ class DocumentRepository:
     ) -> None:
         await self._session.execute(
             sa.update(DocumentRow)
-            .where(DocumentRow.id == uuid.UUID(document_id))
+            .where(DocumentRow.id == parse_uuid(document_id))
             .values(
                 title=title,
                 doc_class=doc_class,
@@ -187,7 +284,7 @@ class DocumentRepository:
     ) -> None:
         await self._session.execute(
             sa.update(DocumentRow)
-            .where(DocumentRow.id == uuid.UUID(document_id))
+            .where(DocumentRow.id == parse_uuid(document_id))
             .values(
                 parser_version=parser_version,
                 chunker_version=chunker_version,
@@ -206,8 +303,8 @@ class SectionRepository:
     async def bulk_create(self, sections: list[Section]) -> list[str]:
         rows = [
             SectionRow(
-                document_id=uuid.UUID(s.document_id),
-                parent_section_id=uuid.UUID(s.parent_section_id) if s.parent_section_id else None,
+                document_id=parse_uuid(s.document_id),
+                parent_section_id=parse_uuid(s.parent_section_id) if s.parent_section_id else None,
                 heading=s.heading,
                 heading_path=s.heading_path,
                 level=s.level,
@@ -221,9 +318,18 @@ class SectionRepository:
         await self._session.flush()
         return [str(r.id) for r in rows]
 
+    async def update_parents(self, pairs: list[tuple[str, str]]) -> None:
+        """Second pass: parent ids are unknown until the rows are flushed."""
+        for child_id, parent_id in pairs:
+            await self._session.execute(
+                sa.update(SectionRow)
+                .where(SectionRow.id == parse_uuid(child_id))
+                .values(parent_section_id=parse_uuid(parent_id))
+            )
+
     async def delete_by_document(self, document_id: str) -> None:
         await self._session.execute(
-            sa.delete(SectionRow).where(SectionRow.document_id == uuid.UUID(document_id))
+            sa.delete(SectionRow).where(SectionRow.document_id == parse_uuid(document_id))
         )
 
 
@@ -234,9 +340,9 @@ class ChunkRepository:
     async def bulk_create(self, chunks: list[Chunk]) -> list[str]:
         rows = [
             ChunkRow(
-                knowledge_base_id=uuid.UUID(c.knowledge_base_id),
-                document_id=uuid.UUID(c.document_id),
-                section_id=uuid.UUID(c.section_id) if c.section_id else None,
+                knowledge_base_id=parse_uuid(c.knowledge_base_id),
+                document_id=parse_uuid(c.document_id),
+                section_id=parse_uuid(c.section_id) if c.section_id else None,
                 text=c.text,
                 raw_content=c.raw_content,
                 heading_path=c.heading_path,
@@ -259,27 +365,65 @@ class ChunkRepository:
         await self._session.flush()
         return [str(r.id) for r in rows]
 
-    async def get_many(self, chunk_ids: list[str]) -> list[ChunkRow]:
+    async def get_many(self, chunk_ids: list[str], require_ready: bool = False) -> list[ChunkRow]:
         if not chunk_ids:
             return []
         stmt = sa.select(ChunkRow).where(
-            ChunkRow.id.in_([uuid.UUID(i) for i in chunk_ids]),
+            ChunkRow.id.in_([parse_uuid(i) for i in chunk_ids]),
             ChunkRow.deleted_at.is_(None),
         )
+        if require_ready:
+            # 04 section 34: chunks of a document that never reached READY
+            # (e.g. embedding/vector indexing failed) must not be served.
+            stmt = stmt.join(DocumentRow, DocumentRow.id == ChunkRow.document_id).where(
+                DocumentRow.status == DocumentStatus.READY,
+                DocumentRow.deleted_at.is_(None),
+            )
         return list((await self._session.execute(stmt)).scalars().all())
 
     async def soft_delete_by_document(self, document_id: str) -> None:
         await self._session.execute(
             sa.update(ChunkRow)
-            .where(ChunkRow.document_id == uuid.UUID(document_id))
+            .where(ChunkRow.document_id == parse_uuid(document_id))
             .values(deleted_at=datetime.now(UTC))
         )
 
     async def list_ids_by_document(self, document_id: str) -> list[str]:
         stmt = sa.select(ChunkRow.id).where(
-            ChunkRow.document_id == uuid.UUID(document_id),
+            ChunkRow.document_id == parse_uuid(document_id),
             ChunkRow.deleted_at.is_(None),
         )
+        return [str(r) for r in (await self._session.execute(stmt)).scalars().all()]
+
+    async def soft_delete_by_kb(self, kb_id: str) -> None:
+        await self._session.execute(
+            sa.update(ChunkRow)
+            .where(
+                ChunkRow.knowledge_base_id == parse_uuid(kb_id),
+                ChunkRow.deleted_at.is_(None),
+            )
+            .values(deleted_at=datetime.now(UTC))
+        )
+
+    async def list_deleted_ids(self, limit: int = 200) -> list[str]:
+        """Soft-deleted chunks awaiting asynchronous physical cleanup."""
+        stmt = (
+            sa.select(ChunkRow.id)
+            .where(ChunkRow.deleted_at.is_not(None))
+            .limit(limit)
+        )
+        return [str(r) for r in (await self._session.execute(stmt)).scalars().all()]
+
+    async def hard_delete_ids(self, chunk_ids: list[str]) -> None:
+        if not chunk_ids:
+            return
+        await self._session.execute(
+            sa.delete(ChunkRow).where(ChunkRow.id.in_([parse_uuid(i) for i in chunk_ids]))
+        )
+
+    async def all_ids(self) -> list[str]:
+        """Every chunk id, used as the source of truth for orphan reconciliation."""
+        stmt = sa.select(ChunkRow.id)
         return [str(r) for r in (await self._session.execute(stmt)).scalars().all()]
 
     async def delete_by_document(self, document_id: str) -> list[str]:
@@ -287,14 +431,14 @@ class ChunkRepository:
         rows = list(
             (
                 await self._session.execute(
-                    sa.select(ChunkRow.id).where(ChunkRow.document_id == uuid.UUID(document_id))
+                    sa.select(ChunkRow.id).where(ChunkRow.document_id == parse_uuid(document_id))
                 )
             )
             .scalars()
             .all()
         )
         await self._session.execute(
-            sa.delete(ChunkRow).where(ChunkRow.document_id == uuid.UUID(document_id))
+            sa.delete(ChunkRow).where(ChunkRow.document_id == parse_uuid(document_id))
         )
         return [str(r) for r in rows]
 
@@ -305,8 +449,8 @@ class IngestionJobRepository:
 
     async def create(self, job: IngestionJob) -> IngestionJobRow:
         row = IngestionJobRow(
-            knowledge_base_id=uuid.UUID(job.knowledge_base_id),
-            document_id=uuid.UUID(job.document_id),
+            knowledge_base_id=parse_uuid(job.knowledge_base_id),
+            document_id=parse_uuid(job.document_id),
             content_hash=job.content_hash,
         )
         self._session.add(row)
@@ -314,7 +458,7 @@ class IngestionJobRepository:
         return row
 
     async def get(self, job_id: str) -> IngestionJobRow | None:
-        stmt = sa.select(IngestionJobRow).where(IngestionJobRow.id == uuid.UUID(job_id))
+        stmt = sa.select(IngestionJobRow).where(IngestionJobRow.id == parse_uuid(job_id))
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
     async def update(
@@ -327,6 +471,8 @@ class IngestionJobRepository:
         embedding_count: int | None = None,
         error_code: str | None = None,
         error_message: str | None = None,
+        attempt_count: int | None = None,
+        next_attempt_at: datetime | None = None,
     ) -> None:
         values: dict = {"status": status}
         if stage is not None:
@@ -340,19 +486,58 @@ class IngestionJobRepository:
         if error_code is not None:
             values["error_code"] = error_code
             values["error_message"] = error_message
+        if attempt_count is not None:
+            values["attempt_count"] = attempt_count
+        if next_attempt_at is not None:
+            values["next_attempt_at"] = next_attempt_at
         if status == JobStatus.RUNNING:
-            values["started_at"] = datetime.now(UTC)
+            # Keep the first started_at of the current attempt; later stage
+            # transitions must not reset it (stale-job detection relies on it).
+            values["started_at"] = sa.func.coalesce(IngestionJobRow.started_at, sa.func.now())
         if status in (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED):
             values["finished_at"] = datetime.now(UTC)
         await self._session.execute(
-            sa.update(IngestionJobRow).where(IngestionJobRow.id == uuid.UUID(job_id)).values(**values)
+            sa.update(IngestionJobRow).where(IngestionJobRow.id == parse_uuid(job_id)).values(**values)
+        )
+
+    async def requeue(self, job_id: str, next_attempt_at: datetime) -> None:
+        """Put a failed/interrupted job back to PENDING for another attempt."""
+        await self._session.execute(
+            sa.update(IngestionJobRow)
+            .where(IngestionJobRow.id == parse_uuid(job_id))
+            .values(
+                status=JobStatus.PENDING,
+                next_attempt_at=next_attempt_at,
+                started_at=None,
+            )
         )
 
     async def list_pending(self, limit: int = 10) -> list[IngestionJobRow]:
+        now = datetime.now(UTC)
         stmt = (
             sa.select(IngestionJobRow)
-            .where(IngestionJobRow.status == JobStatus.PENDING)
+            .where(
+                IngestionJobRow.status == JobStatus.PENDING,
+                sa.or_(
+                    IngestionJobRow.next_attempt_at.is_(None),
+                    IngestionJobRow.next_attempt_at <= now,
+                ),
+            )
             .order_by(IngestionJobRow.created_at)
+            .limit(limit)
+        )
+        return list((await self._session.execute(stmt)).scalars().all())
+
+    async def list_stale_running(self, cutoff: datetime, limit: int = 50) -> list[IngestionJobRow]:
+        """RUNNING jobs whose attempt started before `cutoff` (worker crashed)."""
+        stmt = (
+            sa.select(IngestionJobRow)
+            .where(
+                IngestionJobRow.status == JobStatus.RUNNING,
+                IngestionJobRow.started_at.is_not(None),
+                IngestionJobRow.started_at < cutoff,
+            )
+            .order_by(IngestionJobRow.started_at)
             .limit(limit)
         )
         return list((await self._session.execute(stmt)).scalars().all())
@@ -360,12 +545,23 @@ class IngestionJobRepository:
     async def list(
         self,
         document_id: str | None = None,
+        status: JobStatus | None = None,
         limit: int = 50,
-    ) -> list[IngestionJobRow]:
-        stmt = sa.select(IngestionJobRow).order_by(IngestionJobRow.created_at.desc()).limit(limit)
+        cursor: tuple[datetime, str] | None = None,
+    ) -> tuple[list[IngestionJobRow], bool]:
+        stmt = (
+            sa.select(IngestionJobRow)
+            .order_by(IngestionJobRow.created_at.desc(), IngestionJobRow.id.desc())
+            .limit(limit + 1)
+        )
         if document_id is not None:
-            stmt = stmt.where(IngestionJobRow.document_id == uuid.UUID(document_id))
-        return list((await self._session.execute(stmt)).scalars().all())
+            stmt = stmt.where(IngestionJobRow.document_id == parse_uuid(document_id))
+        if status is not None:
+            stmt = stmt.where(IngestionJobRow.status == status)
+        stmt = _apply_cursor(stmt, IngestionJobRow, cursor, descending=True)
+        rows = list((await self._session.execute(stmt)).scalars().all())
+        has_more = len(rows) > limit
+        return rows[:limit], has_more
 
 
 class ConversationRepository:
@@ -373,14 +569,14 @@ class ConversationRepository:
         self._session = session
 
     async def create(self, kb_id: str) -> ConversationRow:
-        row = ConversationRow(knowledge_base_id=uuid.UUID(kb_id))
+        row = ConversationRow(knowledge_base_id=parse_uuid(kb_id))
         self._session.add(row)
         await self._session.flush()
         return row
 
     async def get(self, conversation_id: str) -> ConversationRow | None:
         stmt = sa.select(ConversationRow).where(
-            ConversationRow.id == uuid.UUID(conversation_id)
+            ConversationRow.id == parse_uuid(conversation_id)
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
@@ -393,10 +589,10 @@ class ConversationRepository:
     ) -> None:
         self._session.add(
             ConversationMessageRow(
-                conversation_id=uuid.UUID(conversation_id),
+                conversation_id=parse_uuid(conversation_id),
                 role=role,
                 content=content,
-                answer_id=uuid.UUID(answer_id) if answer_id else None,
+                answer_id=parse_uuid(answer_id) if answer_id else None,
             )
         )
         await self._session.flush()
@@ -404,13 +600,34 @@ class ConversationRepository:
     async def recent_messages(self, conversation_id: str, limit: int = 10) -> list[ConversationMessageRow]:
         stmt = (
             sa.select(ConversationMessageRow)
-            .where(ConversationMessageRow.conversation_id == uuid.UUID(conversation_id))
+            .where(ConversationMessageRow.conversation_id == parse_uuid(conversation_id))
             .order_by(ConversationMessageRow.created_at.desc())
             .limit(limit)
         )
         rows = list((await self._session.execute(stmt)).scalars().all())
         rows.reverse()
         return rows
+
+    async def list_messages(
+        self,
+        conversation_id: str,
+        limit: int = 50,
+        cursor: tuple[datetime, str] | None = None,
+    ) -> tuple[list[ConversationMessageRow], bool]:
+        """Newest-first page for the public list endpoint."""
+        stmt = (
+            sa.select(ConversationMessageRow)
+            .where(ConversationMessageRow.conversation_id == parse_uuid(conversation_id))
+            .order_by(
+                ConversationMessageRow.created_at.desc(),
+                ConversationMessageRow.id.desc(),
+            )
+            .limit(limit + 1)
+        )
+        stmt = _apply_cursor(stmt, ConversationMessageRow, cursor, descending=True)
+        rows = list((await self._session.execute(stmt)).scalars().all())
+        has_more = len(rows) > limit
+        return rows[:limit], has_more
 
 
 class QueryTraceRepository:
@@ -424,7 +641,7 @@ class QueryTraceRepository:
         return str(row.id)
 
     async def get_by_answer(self, answer_id: str) -> QueryTraceRow | None:
-        stmt = sa.select(QueryTraceRow).where(QueryTraceRow.answer_id == uuid.UUID(answer_id))
+        stmt = sa.select(QueryTraceRow).where(QueryTraceRow.answer_id == parse_uuid(answer_id))
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
 
