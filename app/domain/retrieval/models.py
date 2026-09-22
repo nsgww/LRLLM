@@ -50,6 +50,9 @@ class RankedChunk:
     chunk_type: str = "TEXT"
     raw_content: str | None = None
     parent_chunk_id: str | None = None
+    # 父块全文（仅 PostgreSQL 存储，Qdrant 无父块向量）；命中子块时
+    # Context 优先使用它提供完整上下文（04 节 17.1）。
+    parent_content: str | None = None
     product: str | None = None
     version: str | None = None
     sub_query_id: str | None = None

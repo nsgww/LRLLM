@@ -22,7 +22,7 @@ from app.domain.document import DocumentStatus
 from app.domain.ingestion import ASTBlock, BlockType, JobStatus
 from app.domain.section import Section
 from app.embedding.interface import EmbeddingModel
-from app.ingestion.chunkers.semantic import SemanticChunk, SemanticChunker
+from app.ingestion.chunkers.semantic import ParentChunkNode, SemanticChunk, SemanticChunker
 from app.ingestion.metadata import resolve_metadata
 from app.ingestion.parsers.base import Parser
 from app.ingestion.parsers.markdown import MarkdownParser
@@ -202,8 +202,30 @@ class IngestionPipeline:
                 # no old point left to become an orphan (09 section 11). The
                 # document is PROCESSING, so nothing is served in the meantime.
                 await self._vector_store.delete(old_chunk_ids)
-                semantic_chunks = self._chunker.chunk(ast)
-                chunks = [
+
+                # 04 节 17.1：子块负责检索，父块只存 PostgreSQL、在 Context
+                # 中提供完整上下文；context_expand_to_parent 关闭时退化为
+                # 纯子块切块。
+                if self._settings.context_expand_to_parent:
+                    nodes = await self._chunker.chunk_with_parents(
+                        ast, self._settings.parent_chunk_tokens
+                    )
+                else:
+                    nodes = [
+                        ParentChunkNode(parent=None, child=sc)
+                        for sc in await self._chunker.chunk(ast)
+                    ]
+
+                # 只有真正被子块引用的父块才落库（代码/表格子块无父块，
+                # 第二遍聚合中未被引用的块也不需要成行）。父块必须先于
+                # 子块插入，子块的 parent_chunk_id 外键才能解析。
+                parent_objs: list[SemanticChunk] = []
+                parent_id_by_obj: dict[int, str] = {}
+                for node in nodes:
+                    if node.parent is not None and id(node.parent) not in parent_id_by_obj:
+                        parent_id_by_obj[id(node.parent)] = ""
+                        parent_objs.append(node.parent)
+                parent_rows = [
                     _to_chunk(
                         sc,
                         index=index,
@@ -212,8 +234,35 @@ class IngestionPipeline:
                         section_id=_find_section_id(sc.heading_path, section_id_by_path),
                         product=resolved.product,
                         version=resolved.version,
+                        is_parent=True,
+                    )
+                    for index, sc in enumerate(parent_objs)
+                ]
+                if parent_rows:
+                    for obj, row_id in zip(
+                        parent_objs,
+                        await chunks_repo.bulk_create(parent_rows),
+                        strict=True,
+                    ):
+                        parent_id_by_obj[id(obj)] = row_id
+
+                semantic_chunks = [node.child for node in nodes]
+                chunks = [
+                    _to_chunk(
+                        sc,
+                        index=len(parent_objs) + index,
+                        document_id=document_id,
+                        knowledge_base_id=str(document.knowledge_base_id),
+                        section_id=_find_section_id(sc.heading_path, section_id_by_path),
+                        product=resolved.product,
+                        version=resolved.version,
                         embedding_model=self._embedding.model_name,
                         embedding_model_version=self._embedding.model_version,
+                        parent_chunk_id=(
+                            parent_id_by_obj.get(id(nodes[index].parent))
+                            if nodes[index].parent is not None
+                            else None
+                        ),
                     )
                     for index, sc in enumerate(semantic_chunks)
                 ]
@@ -400,8 +449,10 @@ def _to_chunk(
     section_id: str | None,
     product: str | None,
     version: str | None,
-    embedding_model: str,
-    embedding_model_version: str,
+    embedding_model: str | None,
+    embedding_model_version: str | None,
+    is_parent: bool = False,
+    parent_chunk_id: str | None = None,
 ) -> Chunk:
     return Chunk(
         document_id=document_id,
@@ -416,6 +467,8 @@ def _to_chunk(
         token_count=sc.token_count,
         content_hash=sc.content_hash,
         chunk_type=sc.chunk_type,
+        is_parent=is_parent,
+        parent_chunk_id=parent_chunk_id,
         product=product,
         version=version,
         embedding_model=embedding_model,

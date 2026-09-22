@@ -16,6 +16,8 @@ def _chunk(
     version: str | None = "0.5.3",
     text: str = "body text",
     raw_content: str | None = None,
+    parent_chunk_id: str | None = None,
+    parent_content: str | None = None,
 ) -> RankedChunk:
     return RankedChunk(
         chunk_id=chunk_id,
@@ -26,6 +28,8 @@ def _chunk(
         line_start=1,
         line_end=2,
         raw_content=raw_content,
+        parent_chunk_id=parent_chunk_id,
+        parent_content=parent_content,
         product="MCP",
         version=version,
     )
@@ -77,3 +81,49 @@ def test_table_uses_raw_content_in_context():
 def test_heading_path_included_with_each_chunk():
     built = _builder().build([_chunk("c1")], version_specified=True)
     assert "[MCP / Guide]" in built.text
+
+
+def _child_with_parent(chunk_id: str, parent_id: str = "p1") -> RankedChunk:
+    return _chunk(
+        chunk_id,
+        text="child body",
+        parent_chunk_id=parent_id,
+        parent_content="full parent section text",
+    )
+
+
+def test_parent_expansion_prefers_parent_content():
+    built = _builder().build([_child_with_parent("c1")], version_specified=True)
+    assert "full parent section text" in built.text
+    assert "child body" not in built.text
+
+
+def test_sibling_children_collapse_to_single_parent():
+    chunks = [_child_with_parent("c1"), _child_with_parent("c2"), _chunk("c3")]
+    built = _builder().build(chunks, version_specified=True)
+    assert [c.chunk_id for c in built.chunks] == ["c1", "c3"]
+    assert built.text.count("full parent section text") == 1
+
+
+def test_parent_expansion_respects_token_budget():
+    big_parent = " ".join(f"w{i}" for i in range(20))  # 20 tokens > budget 10
+    chunk = _child_with_parent("c1")
+    chunk.parent_content = big_parent
+    built = _builder(budget=10).build([chunk], version_specified=True)
+    assert built.chunks == []  # single over-budget chunk is never forced in
+    assert big_parent not in built.text
+
+
+def test_expansion_disabled_keeps_child_text():
+    settings = Settings(context_expand_to_parent=False)
+    builder = ContextBuilder(settings, counter=WordCounter())
+    built = builder.build([_child_with_parent("c1")], version_specified=True)
+    assert "child body" in built.text
+    assert "full parent section text" not in built.text
+
+
+def test_chunk_without_parent_content_falls_back_to_own_text():
+    # 旧文档（接线前入库）没有父块，仍按自身内容进入上下文
+    chunk = _chunk("legacy", text="legacy body", parent_chunk_id="p1")
+    built = _builder().build([chunk], version_specified=True)
+    assert "legacy body" in built.text

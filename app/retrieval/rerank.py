@@ -48,7 +48,13 @@ class RerankService:
         async with self._session_factory() as session:
             # require_ready: vector recall may surface points whose document is
             # still PROCESSING/FAILED; only READY documents may be served.
-            rows = await ChunkRepository(session).get_many(candidate_ids, require_ready=True)
+            chunks = ChunkRepository(session)
+            rows = await chunks.get_many(candidate_ids, require_ready=True)
+            # 04 节 17.1：命中子块后在 Context 中扩展为父块全文；父块只存
+            # PostgreSQL，此处一次性批量取回，避免逐块查询。
+            parent_ids = {str(r.parent_chunk_id) for r in rows if r.parent_chunk_id}
+            parents = await chunks.get_many(list(parent_ids)) if parent_ids else []
+        parent_text_by_id = {str(p.id): (p.raw_content or p.text) for p in parents}
         rows_by_id = {str(r.id): r for r in rows}
         ordered_rows = [rows_by_id[cid] for cid in candidate_ids if cid in rows_by_id]
 
@@ -63,7 +69,12 @@ class RerankService:
                     raise ValueError("reranker returned out-of-range index")
                 return RerankOutcome(
                     chunks=[
-                        _to_ranked(ordered_rows[r.index], r.score, sub_query_id)
+                        _to_ranked(
+                            ordered_rows[r.index],
+                            r.score,
+                            sub_query_id,
+                            parent_text_by_id,
+                        )
                         for r in results
                     ]
                 )
@@ -74,14 +85,20 @@ class RerankService:
         top_n = self._settings.rerank_top_n
         return RerankOutcome(
             chunks=[
-                _to_ranked(r, rrf_scores.get(str(r.id), 0.0), sub_query_id)
+                _to_ranked(r, rrf_scores.get(str(r.id), 0.0), sub_query_id, parent_text_by_id)
                 for r in ordered_rows[:top_n]
             ],
             fallback=self._reranker is not None,
         )
 
 
-def _to_ranked(row, score: float, sub_query_id: str | None) -> RankedChunk:
+def _to_ranked(
+    row,
+    score: float,
+    sub_query_id: str | None,
+    parent_text_by_id: dict[str, str] | None = None,
+) -> RankedChunk:
+    parent_id = str(row.parent_chunk_id) if row.parent_chunk_id else None
     return RankedChunk(
         chunk_id=str(row.id),
         document_id=str(row.document_id),
@@ -92,6 +109,8 @@ def _to_ranked(row, score: float, sub_query_id: str | None) -> RankedChunk:
         line_end=row.line_end,
         chunk_type=row.chunk_type.value,
         raw_content=row.raw_content,
+        parent_chunk_id=parent_id,
+        parent_content=(parent_text_by_id or {}).get(parent_id) if parent_id else None,
         product=row.product,
         version=row.version,
         sub_query_id=sub_query_id,
