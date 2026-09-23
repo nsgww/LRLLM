@@ -1,8 +1,8 @@
 # LRLLM — Private Knowledge RAG (v0.1)
 
-私有知识库 RAG 问答助手：Markdown 文档入库 → 混合检索（向量 + 关键词，RRF 融合）→
-证据检查 → SSE 流式回答。单一共享知识空间，通过 `X-Knowledge-Base-ID` 头约定作用域，
-v0.1 不做真实鉴权。
+私有知识库 RAG 问答助手：文档入库（Markdown / HTML / PDF）→ 父子切块 →
+混合检索（向量 + 关键词，RRF 融合）→ 父块上下文扩展 → 证据检查 → SSE 流式回答。
+单一共享知识空间，通过 `X-Knowledge-Base-ID` 头约定作用域，v0.1 不做真实鉴权。
 
 核心原则（见 `skills/skills.md`）：
 
@@ -98,8 +98,9 @@ app/
 │   ├── cleanup_service.py   #   软删除物理清理与孤儿向量对账（09 号文档 11 节）
 │   └── conversation_service.py
 ├── ingestion/               # 入库管线实现（04 号文档）
-│   ├── parsers/markdown.py  #   Markdown → AST：front matter、heading_path、行号
-│   ├── chunkers/            #   语义切块（代码块不拆、表格保留原文）+ token 兜底切分
+│   ├── parsers/             #   Markdown / HTML / PDF → 统一 AST，按内容嗅探路由（04 节 23）
+│   ├── chunkers/            #   语义切块（代码块不拆、表格保留原文）+ 父子结构（04 节 17.1）
+│   │                        #   + token 兜底切分 + 可选语义断点切分（04 节 15.1）
 │   ├── metadata.py          #   元数据优先级：显式 > front matter > 文件名；冲突报错
 │   └── pipeline.py          #   管线编排：指纹幂等、PG/Qdrant 双写、双侧成功才 READY
 ├── retrieval/               # 检索链路（06 号文档）

@@ -356,6 +356,23 @@ Sentence
 
 尽量避免在句子中间切断。
 
+## 15.1 Semantic Split（可选，默认关闭）
+
+Token-based Split 按句子边界顺序打包，不判断语义断点。开启
+`semantic_split_enabled` 后，超长段落改用语义断点切分：
+
+```text
+句子列表 -> 批量 Embedding -> 相邻句子余弦相似度
+-> 相似度 < semantic_split_threshold 的位置断开
+-> 段内打包仍受 max_chunk_tokens 约束，超限段退回 Token-based Split
+```
+
+约束：
+
+- Embedding 调用失败不得阻断入库，必须退回 Token-based Split。
+- 开启会额外消耗入库阶段的 Embedding 调用，默认关闭。
+- 断句口径与 Token-based Split 一致。
+
 ## 16. Code Block
 
 代码块是不可拆分语义单元。
@@ -386,6 +403,26 @@ normalized_content
 Raw 用于最终 Context。
 
 Normalized 用于 Keyword / Semantic Retrieval。
+
+## 17.1 Parent / Child Chunking
+
+子块负责检索，父块负责在 Context 中提供完整上下文。
+
+```text
+子块: max_chunk_tokens 预算，向量化并进入两条召回路径
+父块: parent_chunk_tokens 预算（同一套聚合规则），只存 PostgreSQL，
+      不向量化、不参与关键词召回（is_parent = true）
+```
+
+规则：
+
+- 文本 / 列表子块归属到行范围能完整容纳它的最小父块（`parent_chunk_id`）。
+- 代码 / 表格自身已是完整语义单元，独立成块，不归属父块。
+- 检索命中子块后，Context 构建按 `parent_chunk_id` 扩展为父块全文；
+  同一父块的多个命中只保留排名最高的一个（见 06 节 8）。
+- 父块放不下 token 预算时，该命中保持使用子块。
+- `context_expand_to_parent = false` 时退化为纯子块模式，不建父块。
+- 版本指纹包含 Chunker 版本，父子结构变更触发全量重建。
 
 ## 18. Chunk Model
 

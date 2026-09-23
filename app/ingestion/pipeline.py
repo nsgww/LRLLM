@@ -23,9 +23,10 @@ from app.domain.ingestion import ASTBlock, BlockType, JobStatus
 from app.domain.section import Section
 from app.embedding.interface import EmbeddingModel
 from app.ingestion.chunkers.semantic import ParentChunkNode, SemanticChunk, SemanticChunker
+from app.ingestion.chunkers.semantic_split import EmbeddingSentenceSplitter
 from app.ingestion.metadata import resolve_metadata
+from app.ingestion.parsers import parser_for
 from app.ingestion.parsers.base import Parser
-from app.ingestion.parsers.markdown import MarkdownParser
 from app.storage.base import VectorPoint, VectorStore
 from app.storage.postgres.repositories import (
     ChunkRepository,
@@ -85,8 +86,24 @@ class IngestionPipeline:
         self._vector_store = vector_store
         self._embedding = embedding
         self._settings = settings
-        self._parser = parser or MarkdownParser()
-        self._chunker = chunker or SemanticChunker(max_tokens=settings.max_chunk_tokens)
+        # parser 为 None 时按文档内容自动路由（markdown / html / pdf，04 节 23）
+        self._parser = parser
+        if chunker is not None:
+            self._chunker = chunker
+        else:
+            # 语义切分默认关闭；开启后超长段落按句子相似度低谷断点（04 节 15.1）
+            splitter = (
+                EmbeddingSentenceSplitter(
+                    embedding,
+                    threshold=settings.semantic_split_threshold,
+                )
+                if settings.semantic_split_enabled
+                else None
+            )
+            self._chunker = SemanticChunker(
+                max_tokens=settings.max_chunk_tokens,
+                splitter=splitter,
+            )
 
     async def process(self, job_id: str) -> IngestionResult:
         stage = "DB"
@@ -113,9 +130,10 @@ class IngestionPipeline:
                 attempt = (job.attempt_count or 0) + 1
                 result = IngestionResult(job_id=job_id, document_id=document_id, status=JobStatus.RUNNING)
 
+                parser = self._parser or _select_parser(document)
                 fingerprint = _processing_fingerprint(
                     document.content_hash,
-                    self._parser.version,
+                    parser.version,
                     self._chunker.version,
                     self._embedding.model_version,
                 )
@@ -137,8 +155,11 @@ class IngestionPipeline:
 
                 # PARSE
                 stage = "PARSE"
-                ast = await self._parser.parse(
-                    document.content.encode("utf-8"),
+                ast = await parser.parse(
+                    # PDF 以 latin-1 保真还原原始字节；文本格式按 UTF-8
+                    document.content.encode("latin-1")
+                    if parser.name == "pdf"
+                    else document.content.encode("utf-8"),
                     metadata={
                         "title": document.title,
                         "doc_class": document.doc_class,
@@ -165,7 +186,7 @@ class IngestionPipeline:
                 )
                 await documents.update_processing(
                     document_id,
-                    parser_version=self._parser.version,
+                    parser_version=parser.version,
                     chunker_version=self._chunker.version,
                     embedding_model=self._embedding.model_name,
                     embedding_model_version=self._embedding.model_version,
@@ -380,6 +401,11 @@ def _processing_fingerprint(
     """04 section 5: content + parser + chunker + embedding model version."""
     raw = "|".join([content_hash, parser_version, chunker_version, embedding_model_version])
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _select_parser(document) -> Parser:
+    """按文件名提示 + 内容嗅探路由解析器（04 节 23）。"""
+    return parser_for(document.content, hint=document.title)
 
 
 def _build_sections(

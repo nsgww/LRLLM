@@ -26,7 +26,8 @@ from app.storage.postgres.repositories import (
     KnowledgeBaseRepository,
 )
 
-_ALLOWED_SUFFIXES = (".md", ".markdown")
+# 04 节 23：按扩展名准入，实际解析器由管线按内容路由（含嗅探兜底）
+_ALLOWED_SUFFIXES = (".md", ".markdown", ".html", ".htm", ".pdf")
 
 
 @dataclass
@@ -56,7 +57,7 @@ class IngestionService:
         if not filename.lower().endswith(_ALLOWED_SUFFIXES):
             raise AppError(
                 code="FILE_UNSUPPORTED",
-                message="v0.1 only supports Markdown (.md) upload",
+                message="supported formats: .md / .markdown / .html / .htm / .pdf",
                 http_status=400,
             )
         if not content or not content.strip():
@@ -66,11 +67,16 @@ class IngestionService:
         try:
             text = content.decode("utf-8")
         except UnicodeDecodeError as exc:
-            raise AppError(
-                code="FILE_INVALID",
-                message="file must be UTF-8 encoded Markdown",
-                http_status=400,
-            ) from exc
+            # PDF 等二进制内容：latin-1 按字节保真映射为 str 存入 TEXT 列，
+            # 管线解析时按 parser.name == "pdf" 还原原始字节
+            if filename.lower().endswith(".pdf"):
+                text = content.decode("latin-1")
+            else:
+                raise AppError(
+                    code="FILE_INVALID",
+                    message="text documents must be UTF-8 encoded",
+                    http_status=400,
+                ) from exc
 
         async with self._session_factory() as session:
             kb = await KnowledgeBaseRepository(session).get(kb_id)
