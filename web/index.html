@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>私有知识库 RAG 问答</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="layout">
+    <!-- 左侧栏：知识库选择 + 会话列表 -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <span class="brand">LRLLM 知识库</span>
+      </div>
+      <div class="kb-row">
+        <select id="kb-select" title="选择知识库"></select>
+        <button id="kb-new" class="icon-btn" title="新建知识库">＋</button>
+      </div>
+      <button id="conv-new" class="new-conv-btn">＋ 新建对话</button>
+      <nav id="conv-list" class="conv-list"></nav>
+      <div class="sidebar-footer">
+        <button id="tab-chat" class="tab-btn active">对话</button>
+        <button id="tab-kb" class="tab-btn">知识库管理</button>
+      </div>
+    </aside>
+
+    <!-- 主区域：对话 / 知识库管理 -->
+    <main class="main">
+      <!-- 对话视图 -->
+      <section id="view-chat" class="view">
+        <div id="messages" class="messages"></div>
+        <form id="composer" class="composer">
+          <textarea id="input" rows="2" placeholder="输入问题，Enter 发送，Shift+Enter 换行"></textarea>
+          <button type="submit" id="send" class="send-btn">发送</button>
+        </form>
+      </section>
+
+      <!-- 知识库管理视图 -->
+      <section id="view-kb" class="view hidden">
+        <div class="kb-panel">
+          <h2>上传文档</h2>
+          <form id="upload-form" class="upload-form">
+            <input type="file" id="upload-file" accept=".md,.markdown,.html,.htm,.pdf" required>
+            <div class="form-grid">
+              <input type="text" id="upload-title" placeholder="标题（可选，默认取文件名）">
+              <input type="text" id="upload-product" placeholder="产品（可选，如 MCP）">
+              <input type="text" id="upload-version" placeholder="版本（可选，如 0.5.3）">
+              <input type="text" id="upload-doc-class" placeholder="文档分类（可选）">
+            </div>
+            <button type="submit" class="primary-btn">上传并入库</button>
+          </form>
+          <div id="upload-result" class="upload-result"></div>
+
+          <h2>文档列表</h2>
+          <table class="doc-table">
+            <thead>
+              <tr><th>标题</th><th>产品</th><th>版本</th><th>状态</th><th>操作</th></tr>
+            </thead>
+            <tbody id="doc-list"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

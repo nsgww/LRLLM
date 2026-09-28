@@ -1,4 +1,8 @@
-"""Conversation read service (05-api-spec section 10)."""
+"""Conversation read service (05-api-spec section 10).
+
+新建对话由 Web 端显式创建（POST /v1/conversations），也可以在
+Query 时不带 conversation_id 由查询服务隐式创建。
+"""
 
 from datetime import datetime
 
@@ -23,6 +27,16 @@ class ConversationService:
                 http_status=404,
             )
         return row
+
+    async def create(self, kb_id: str) -> ConversationRow:
+        async with self._session_factory() as session:
+            row = await ConversationRepository(session).create(kb_id)
+            await session.commit()
+            return row
+
+    async def list_by_kb(self, kb_id: str, limit: int = 50) -> list[ConversationRow]:
+        async with self._session_factory() as session:
+            return await ConversationRepository(session).list_by_kb(kb_id, limit)
 
     async def list_messages(
         self,

@@ -574,6 +574,16 @@ class ConversationRepository:
         await self._session.flush()
         return row
 
+    async def list_by_kb(self, kb_id: str, limit: int = 50) -> list[ConversationRow]:
+        """按知识库列出会话，最新在前（05 节 10）。"""
+        stmt = (
+            sa.select(ConversationRow)
+            .where(ConversationRow.knowledge_base_id == parse_uuid(kb_id))
+            .order_by(ConversationRow.created_at.desc())
+            .limit(limit)
+        )
+        return list((await self._session.execute(stmt)).scalars().all())
+
     async def get(self, conversation_id: str) -> ConversationRow | None:
         stmt = sa.select(ConversationRow).where(
             ConversationRow.id == parse_uuid(conversation_id)
