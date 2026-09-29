@@ -34,6 +34,7 @@ from app.retrieval.rerank import RerankService
 from app.services.conversation_service import ConversationService
 from app.services.ingestion_service import IngestionService
 from app.services.knowledge_base_service import KnowledgeBaseService
+from app.services.queue import IngestionQueue
 from app.services.query_service import QueryService
 from app.storage.keyword.store import PostgresKeywordStore
 from app.storage.postgres.db import dispose_engine, get_session_factory, init_engine
@@ -87,7 +88,10 @@ def create_app() -> FastAPI:
 
         app.state.session_factory = session_factory
         app.state.kb_service = KnowledgeBaseService(session_factory)
-        app.state.ingestion_service = IngestionService(session_factory, vector_store)
+        queue = IngestionQueue(settings.redis_url, settings.redis_queue_enabled)
+        app.state.ingestion_service = IngestionService(
+            session_factory, vector_store, queue
+        )
         app.state.conversation_service = ConversationService(session_factory)
         app.state.query_service = QueryService(
             settings=settings,
@@ -102,6 +106,7 @@ def create_app() -> FastAPI:
         try:
             yield
         finally:
+            await queue.aclose()
             await llm.aclose()
             await embedding.aclose()
             if reranker is not None:

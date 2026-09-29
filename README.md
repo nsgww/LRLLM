@@ -131,14 +131,17 @@ app/
 
 ## workers/ — 后台进程
 
-- `ingestion_worker.py`：入库 Worker。轮询 PENDING 状态的 Job 并执行完整入库管线
-  （上传只创建 Job，不做实际处理）。具备崩溃恢复与重试：启动及轮询时回收超时的
+- `ingestion_worker.py`：入库 Worker。上传只创建 Job，不做实际处理；Worker 优先
+  BLPOP Redis 队列快速拾取（秒级响应），队列空或 Redis 不可用时回退周期扫库，
+  PostgreSQL 始终是任务的唯一事实来源。具备崩溃恢复与重试：启动及轮询时回收超时的
   `RUNNING` Job，瞬时失败按 `RAG_INGESTION_MAX_ATTEMPTS` 退避重试；同时周期执行
-  软删除数据的物理清理与孤儿向量对账。v0.1 假定单实例；Redis 已预留，暂未消费。
+  软删除数据的物理清理与孤儿向量对账。v0.1 假定单实例。
 
 ## scripts/ — 一次性脚本
 
 - `init_db.sql`：建库脚本，与 09 号文档 DDL 一致，`psql -f` 直接执行
+- `migrate_0.2.0.sql`：0.2.0 增量迁移（父子分块字段、任务重试字段）。仅旧库需要，
+  幂等可重复执行：`psql -d <库名> -f scripts/migrate_0.2.0.sql`
 - `seed_prompts.py`：把 `app/llm/prompts/seed/` 下的 6 个模板灌入 `prompt_templates` 表
 
 ## tests/ — 测试与评测

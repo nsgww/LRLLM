@@ -73,6 +73,8 @@ class Settings(BaseSettings):
     ingestion_retry_backoff_seconds: int = 30
     ingestion_stale_job_timeout_seconds: int = 300
     ingestion_poll_interval_seconds: float = 2.0
+    # Redis 任务队列快速通道（03 节技术选型）；关闭后 Worker 纯 DB 轮询
+    redis_queue_enabled: bool = True
 
     # background physical cleanup
     cleanup_batch_size: int = 200

@@ -2,6 +2,8 @@
 04-ingestion-pipeline-spec 第 3、24、25 节）。
 
 - 上传操作仅创建文档和任务；解析过程为异步（由工作进程处理）。
+- 任务提交后尽力推入 Redis 队列（秒级响应），Redis 不可用时
+  由 Worker 周期扫库兜底，不影响上传结果。
 - 同一知识库中的重复内容将被拒绝（409）。
 - 删除操作为软删除：检索排除立即生效，Qdrant 数据点的
   移除在此处进行，物理行清理则交由后台任务处理。
@@ -17,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.errors import AppError
 from app.domain.document import Document
 from app.domain.ingestion import IngestionJob, JobStatus
+from app.services.queue import IngestionQueue
 from app.storage.base import VectorStore
 from app.storage.postgres.orm import DocumentRow, IngestionJobRow
 from app.storage.postgres.repositories import (
@@ -43,9 +46,11 @@ class IngestionService:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         vector_store: VectorStore,
+        queue: IngestionQueue | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._vector_store = vector_store
+        self._queue = queue
 
     async def upload(
         self,
@@ -126,6 +131,9 @@ class IngestionService:
                     message="identical content already exists in this knowledge base",
                     http_status=409,
                 ) from exc
+            # 提交成功后尽力通知 Worker 快速拾取（失败不影响结果）
+            if self._queue is not None:
+                await self._queue.enqueue(str(job.id))
             return UploadResult(
                 document_id=str(document.id),
                 ingestion_job_id=str(job.id),
@@ -151,6 +159,8 @@ class IngestionService:
                 )
             )
             await session.commit()
+            if self._queue is not None:
+                await self._queue.enqueue(str(job.id))
             return UploadResult(
                 document_id=document_id,
                 ingestion_job_id=str(job.id),
