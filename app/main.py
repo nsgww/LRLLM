@@ -16,7 +16,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.agent.runner import AgentRunner
 from app.api.routers import (
+    agent,
     answers,
     conversations,
     documents,
@@ -29,6 +31,7 @@ from app.core.errors import AppError
 from app.core.logging import setup_logging
 from app.core.startup import validate_embedding_consistency
 from app.embedding.providers.openai import OpenAIEmbedding
+from app.llm.factory import is_langchain_available
 from app.llm.prompts.loader import PromptLoader
 from app.llm.providers.openai import OpenAILLM
 from app.reranker.providers.http import HttpReranker
@@ -138,6 +141,28 @@ def create_app() -> FastAPI:
         app.state.query_semaphore = asyncio.Semaphore(
             max(1, settings.query_max_concurrency)
         )
+
+        # Agent（自主工具调用）路径。langchain 为可选依赖：未安装时
+        # runner 仍然构造（构造函数不触碰 langchain），但 runner_available
+        # 为 False，/v1/agent 返回 503 且提示安装方式。/v1/query 完全不受影响。
+        app.state.agent_runner = AgentRunner(
+            settings=settings,
+            session_factory=session_factory,
+            hybrid=hybrid,
+            rerank_service=rerank_service,
+        )
+        app.state.agent_runner_available = is_langchain_available()
+        # Agent 与 /v1/query 分开限流：Agent 单请求外部调用数远高于固定管道，
+        # 共享闸门会互相拖累。容量默认取 query 并发的一半（下限 1）。
+        app.state.agent_semaphore = asyncio.Semaphore(
+            max(1, settings.query_max_concurrency // 2)
+        )
+        if settings.agent_enabled and not app.state.agent_runner_available:
+            logger.warning(
+                "agent capability enabled but langchain is not installed; "
+                "/v1/agent will return 503. Install with: "
+                "pip install 'langchain-core>=0.3' 'langchain-openai>=0.2'"
+            )
         try:
             yield
         finally:
@@ -193,7 +218,15 @@ def create_app() -> FastAPI:
             },
         )
 
-    for module in (knowledge_bases, documents, ingestion_jobs, query, answers, conversations):
+    for module in (
+        knowledge_bases,
+        documents,
+        ingestion_jobs,
+        query,
+        agent,
+        answers,
+        conversations,
+    ):
         app.include_router(module.router, prefix=settings.api_prefix)
 
     @app.get("/health")

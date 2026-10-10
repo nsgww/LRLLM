@@ -17,6 +17,10 @@ dependencies = [
     "httpx>=0.27",
     "tiktoken>=0.7",
     "pypdf>=4",
+    # Agent（自主工具调用）能力。仅 agent 路径使用，且为延迟导入：
+    # 未安装时 /v1/query 等既有管道不受影响（见 app/agent/runner.py）。
+    "langchain-core>=0.3",
+    "langchain-openai>=0.2",
 ]
 
 [project.optional-dependencies]

@@ -140,6 +140,16 @@ class Settings(BaseSettings):
     # prompt loading
     prompt_cache_ttl_seconds: int = 5
 
+    # agent（自主工具调用）：LLM 自行决定下一步做什么
+    # 关闭时 /v1/agent 返回 503，既有 /v1/query 管道完全不受影响
+    agent_enabled: bool = True
+    # ReAct 循环最大步数：防止 LLM 反复调用工具不收敛
+    agent_max_iterations: int = 8
+    # 单次工具调用返回给 LLM 的最大片段数（控制上下文膨胀）
+    agent_tool_top_k: int = 5
+    # 单轮 Agent 请求的 wall-clock 上限（秒），超时以 error 事件收敛
+    agent_timeout_seconds: float = 180.0
+
     # ingestion worker resilience
     ingestion_max_attempts: int = 3
     ingestion_retry_backoff_seconds: int = 30

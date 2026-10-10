@@ -242,6 +242,7 @@ CREATE TABLE query_traces (
     error_stage          TEXT,
     latency_ms           INT,
     stage_latencies      JSONB,         -- {stage: ms} 06 section 13
+    agent_steps          JSONB,         -- [{tool, arguments, result_preview}] /v1/agent
     created_at           TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

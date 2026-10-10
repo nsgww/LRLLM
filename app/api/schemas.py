@@ -65,6 +65,17 @@ class QueryRequest(BaseModel):
     conversation_id: str | None = None
 
 
+class AgentRequest(BaseModel):
+    """Agent 请求体（/v1/agent）。
+
+    v0.1 的 Agent 不接续会话历史：自主决策路径的中间状态（工具调用轨迹）
+    在单次请求内闭环，跨轮次记忆尚未定义。conversation_id 预留给后续版本。
+    """
+
+    query: str
+    conversation_id: str | None = None
+
+
 class EvidenceItemOut(BaseModel):
     document_id: str
     document_title: str | None

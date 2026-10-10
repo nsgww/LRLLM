@@ -37,6 +37,9 @@ class QueryTraceBuilder:
     final_answer: str | None = None
     prompt_versions: dict = field(default_factory=dict)
     fallbacks: list[str] = field(default_factory=list)
+    # Agent 路径（/v1/agent）自主决策的工具调用轨迹。
+    # 固定管道（/v1/query）保持为空。
+    agent_steps: list[dict] = field(default_factory=list)
     # Per-stage latency in ms (06 section 13: per_stage_latency).
     stage_latencies: dict = field(default_factory=dict)
     # Stage the query is currently executing; used so an unclassified
@@ -144,6 +147,8 @@ class QueryTraceBuilder:
             "latency_ms": self.latency_ms,
             # 06 section 13 / 09: per-stage breakdown for debugging.
             "stage_latencies": self.stage_latencies or None,
+            # Agent 工具调用轨迹（仅 /v1/agent 填充）
+            "agent_steps": self.agent_steps or None,
         }
 
 

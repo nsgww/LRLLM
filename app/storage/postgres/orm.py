@@ -206,6 +206,8 @@ class QueryTraceRow(Base):
     error_stage: Mapped[str | None] = mapped_column(sa.Text)
     latency_ms: Mapped[int | None] = mapped_column(sa.Integer)
     stage_latencies: Mapped[dict | None] = mapped_column(JSONB)
+    # Agent 路径的工具调用轨迹（/v1/agent）；固定管道保持 NULL
+    agent_steps: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), server_default=sa.func.now())
 
 
