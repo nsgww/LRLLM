@@ -25,6 +25,14 @@ class VectorStore(Protocol):
     async def delete(self, chunk_ids: list[str]) -> None:
         ...
 
+    async def delete_by_knowledge_base(self, knowledge_base_id: str) -> None:
+        """按 payload 过滤删除整个知识库的向量（05 节 5：KB 删除时必须调用）。
+
+        不能用 `delete(list_ids_by_kb())` 代替——那需要把几万条 chunk id
+        拉进内存；Qdrant 原生支持按 payload filter 服务端删除。
+        """
+        ...
+
     async def list_point_ids(self, batch: int = 1000) -> list[str]:
         ...
 

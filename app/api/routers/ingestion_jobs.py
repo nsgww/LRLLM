@@ -1,12 +1,13 @@
 """Ingestion job endpoints (05-api-spec section 7)."""
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 
+from app.api.deps import require_api_key
 from app.api.pagination import decode_cursor, next_cursor
 from app.api.schemas import IngestionJobOut, Page
 from app.domain.ingestion import JobStatus
 
-router = APIRouter(tags=["ingestion-jobs"])
+router = APIRouter(tags=["ingestion-jobs"], dependencies=[Depends(require_api_key)])
 
 
 def _job_out(row) -> IngestionJobOut:

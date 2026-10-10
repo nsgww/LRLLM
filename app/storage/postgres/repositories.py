@@ -426,11 +426,6 @@ class ChunkRepository:
             sa.delete(ChunkRow).where(ChunkRow.id.in_([parse_uuid(i) for i in chunk_ids]))
         )
 
-    async def all_ids(self) -> list[str]:
-        """Every chunk id, used as the source of truth for orphan reconciliation."""
-        stmt = sa.select(ChunkRow.id)
-        return [str(r) for r in (await self._session.execute(stmt)).scalars().all()]
-
     async def iter_id_batches(self, batch_size: int = 5000):
         """Yield chunk id batches via keyset pagination.
 

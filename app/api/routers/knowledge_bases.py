@@ -1,11 +1,12 @@
 """Knowledge base endpoints (05-api-spec section 5)."""
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 
+from app.api.deps import require_api_key
 from app.api.pagination import decode_cursor, next_cursor
 from app.api.schemas import KnowledgeBaseCreate, KnowledgeBaseOut, Page
 
-router = APIRouter(tags=["knowledge-bases"])
+router = APIRouter(tags=["knowledge-bases"], dependencies=[Depends(require_api_key)])
 
 
 def _out(row) -> KnowledgeBaseOut:

@@ -2,18 +2,36 @@
 
 事件顺序：元数据在前，完成/错误在后。引用和片段内容
 绝不会包含在任何事件中。
+
+并发保护：单次查询最坏触发 ~7 次外部调用（embedding / 检索 / rerank /
+evidence LLM / 生成 LLM），因此由进程内信号量限制同时进行的查询数，
+避免 LLM 配额与连接池被打爆。
 """
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
-from app.api.deps import require_kb_id
+from app.api.deps import require_api_key, require_kb_id
 from app.api.schemas import QueryRequest
+from app.core.errors import AppError
 
-router = APIRouter(tags=["query"])
+router = APIRouter(tags=["query"], dependencies=[Depends(require_api_key)])
+
+# SSE 注释心跳：反代/网关常在 60s 无数据时断连，而首 token 可能更慢
+_HEARTBEAT_SECONDS = 15.0
+_SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+}
+
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 @router.post("/query")
@@ -24,16 +42,46 @@ async def query(
 ) -> StreamingResponse:
     await request.app.state.kb_service.get(kb_id)  # 404 when missing/deleted
     service = request.app.state.query_service
+    semaphore: asyncio.Semaphore = request.app.state.query_semaphore
 
     async def event_stream() -> AsyncIterator[str]:
-        async for event in service.ask(kb_id, body.query, body.conversation_id):
-            yield (
-                f"event: {event.event}\n"
-                f"data: {json.dumps(event.data, ensure_ascii=False)}\n\n"
+        # 非阻塞抢占：满载时立刻回 429，不排队占住连接
+        try:
+            await asyncio.wait_for(semaphore.acquire(), timeout=0.01)
+        except TimeoutError:
+            yield _sse(
+                "error",
+                {
+                    "error": {
+                        "code": "QUERY_OVERLOADED",
+                        "stage": None,
+                        "message": "too many concurrent queries, retry shortly",
+                    }
+                },
             )
+            return
+        try:
+            iterator = service.ask(kb_id, body.query, body.conversation_id).__aiter__()
+            while True:
+                try:
+                    event = await asyncio.wait_for(
+                        iterator.__anext__(), timeout=_HEARTBEAT_SECONDS
+                    )
+                except TimeoutError:
+                    yield ": keep-alive\n\n"  # SSE 注释帧，客户端忽略
+                    continue
+                except StopAsyncIteration:
+                    break
+                except AppError as exc:
+                    yield _sse(
+                        "error",
+                        {"error": {"code": exc.code, "stage": exc.stage, "message": exc.message}},
+                    )
+                    break
+                yield _sse(event.event, event.data)
+        finally:
+            semaphore.release()
 
     return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        event_stream(), media_type="text/event-stream", headers=_SSE_HEADERS
     )

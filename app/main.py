@@ -4,6 +4,8 @@ Startup validates that the configured embedding dimension matches the
 Qdrant collection; a mismatch refuses to start (10 section 8).
 """
 
+import asyncio
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -43,10 +45,19 @@ from app.storage.keyword.store import PostgresKeywordStore
 from app.storage.postgres.db import dispose_engine, get_session_factory, init_engine
 from app.storage.qdrant.store import QdrantVectorStore
 
+logger = logging.getLogger(__name__)
+
 
 def create_app() -> FastAPI:
     settings = get_settings()
     setup_logging()
+
+    # 出站地址安全校验：私网 base_url 需显式放行（防 SSRF / 云元数据探测）
+    host_issues = settings.outbound_host_issues()
+    if host_issues:
+        raise RuntimeError(
+            "unsafe outbound base_url configuration:\n  - " + "\n  - ".join(host_issues)
+        )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -106,7 +117,7 @@ def create_app() -> FastAPI:
 
         app.state.session_factory = session_factory
         app.state.vector_store = vector_store
-        app.state.kb_service = KnowledgeBaseService(session_factory)
+        app.state.kb_service = KnowledgeBaseService(session_factory, vector_store)
         queue = IngestionQueue(settings.redis_url, settings.redis_queue_enabled)
         app.state.ingestion_service = IngestionService(
             session_factory, vector_store, queue
@@ -121,6 +132,11 @@ def create_app() -> FastAPI:
             rerank_service=rerank_service,
             evidence_checker=EvidenceChecker(llm, prompts),
             context_builder=ContextBuilder(settings),
+        )
+        # 全局查询并发闸门：单次 /v1/query 最坏触发 ~7 次外部调用，
+        # 不限流会让 LLM 配额被并发请求快速烧穿。按进程内共享信号量保护。
+        app.state.query_semaphore = asyncio.Semaphore(
+            max(1, settings.query_max_concurrency)
         )
         try:
             yield
@@ -152,6 +168,27 @@ def create_app() -> FastAPI:
                     "stage": exc.stage,
                     "message": exc.message,
                     "request_id": getattr(request.state, "request_id", None),
+                }
+            },
+        )
+
+    @app.exception_handler(Exception)
+    async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
+        """兜底：任何未分类异常都不得把原文回给客户端。
+
+        `str(exc)` 常带 SQLAlchemy/asyncpg 语句片段、上游响应体或文件路径，
+        属于信息泄露。细节只进日志，响应给出固定文案 + request_id 便于对账。
+        """
+        request_id = getattr(request.state, "request_id", None)
+        logger.exception("unhandled error on %s %s", request.method, request.url.path)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "stage": None,
+                    "message": "internal server error",
+                    "request_id": request_id,
                 }
             },
         )

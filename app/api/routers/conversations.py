@@ -2,11 +2,11 @@
 
 from fastapi import APIRouter, Depends, Request
 
-from app.api.deps import require_kb_id
+from app.api.deps import require_api_key, require_kb_id
 from app.api.pagination import decode_cursor, next_cursor
 from app.api.schemas import ConversationOut, MessageOut, Page
 
-router = APIRouter(tags=["conversations"])
+router = APIRouter(tags=["conversations"], dependencies=[Depends(require_api_key)])
 
 
 @router.get("/conversations", response_model=list[ConversationOut])

@@ -48,7 +48,7 @@ function items(data) {
 async function loadKnowledgeBases() {
   const kbs = items(await api("/knowledge-bases"));
   const select = $("kb-select");
-  select.innerHTML = "";
+  select.replaceChildren();
   for (const kb of kbs) {
     const opt = document.createElement("option");
     opt.value = kb.id;
@@ -69,7 +69,7 @@ $("kb-select").addEventListener("change", async (e) => {
   state.kbId = e.target.value;
   localStorage.setItem("rag.kbId", state.kbId);
   state.conversationId = null;
-  $("messages").innerHTML = "";
+  $("messages").replaceChildren();
   await loadConversations();
   await loadDocuments();
 });
@@ -92,7 +92,7 @@ $("kb-new").addEventListener("click", async () => {
 
 async function loadConversations() {
   const list = $("conv-list");
-  list.innerHTML = "";
+  list.replaceChildren();
   if (!state.kbId) return;
   const convs = items(await api("/conversations"));
   for (const conv of convs) {
@@ -110,7 +110,7 @@ $("conv-new").addEventListener("click", async () => {
   try {
     const conv = await api("/conversations", { method: "POST" });
     state.conversationId = conv.id;
-    $("messages").innerHTML = "";
+    $("messages").replaceChildren();
     await loadConversations();
   } catch (err) {
     alert(`新建对话失败：${err.message}`);
@@ -120,7 +120,7 @@ $("conv-new").addEventListener("click", async () => {
 async function openConversation(id) {
   state.conversationId = id;
   const box = $("messages");
-  box.innerHTML = "";
+  box.replaceChildren();
   const page = await api(`/conversations/${id}/messages?limit=100`);
   const msgs = items(page).reverse(); // 接口最新在前，展示按时间正序
   for (const m of msgs) {
@@ -179,7 +179,7 @@ async function toggleEvidence(msgDiv, answerId, toggle) {
   msgDiv.appendChild(panel);
   try {
     const data = await api(`/answers/${answerId}/evidence`);
-    panel.innerHTML = "";
+    panel.replaceChildren();
     for (const ev of data.evidence) {
       const item = document.createElement("div");
       item.className = "ev-item";
@@ -239,7 +239,12 @@ $("composer").addEventListener("submit", async (e) => {
         if (line.startsWith("event:")) {
           currentEvent = line.slice(6).trim();
         } else if (line.startsWith("data:")) {
-          const data = JSON.parse(line.slice(5));
+          let data;
+          try {
+            data = JSON.parse(line.slice(5));
+          } catch {
+            continue; // 非 JSON 帧（如 [DONE] 或注释），跳过而不是中断整个流
+          }
           if (currentEvent === "meta") {
             if (!state.conversationId) state.conversationId = data.conversation_id;
             answerId = data.answer_id;
@@ -321,19 +326,31 @@ $("upload-form").addEventListener("submit", async (e) => {
 
 async function loadDocuments() {
   const tbody = $("doc-list");
-  tbody.innerHTML = "";
+  tbody.replaceChildren();
   if (!state.kbId) return;
   try {
     const docs = items(await api("/documents"));
     for (const doc of docs) {
       const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td>${doc.title}</td>
-        <td>${doc.product || "-"}</td>
-        <td>${doc.version || "-"}</td>
-        <td><span class="doc-status ${doc.status}">${doc.status}</span></td>
-        <td></td>
-      `;
+      // 用 createElement + textContent 组装：title/product/version 来源于
+      // 上传文件名与元数据，属不可信输入，拼进 innerHTML 会构成 XSS。
+      for (const value of [
+        doc.title,
+        doc.product || "-",
+        doc.version || "-",
+      ]) {
+        const td = document.createElement("td");
+        td.textContent = value;
+        tr.appendChild(td);
+      }
+      const statusTd = document.createElement("td");
+      const badge = document.createElement("span");
+      badge.className = `doc-status ${doc.status}`;
+      badge.textContent = doc.status;
+      statusTd.appendChild(badge);
+      tr.appendChild(statusTd);
+      tr.appendChild(document.createElement("td"));
+
       const ops = tr.lastElementChild;
       const reindex = document.createElement("button");
       reindex.className = "row-btn";
@@ -354,7 +371,12 @@ async function loadDocuments() {
       tbody.appendChild(tr);
     }
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="5">加载失败：${err.message}</td></tr>`;
+    const td = document.createElement("td");
+    td.colSpan = 5;
+    td.textContent = `加载失败：${err.message}`;
+    const tr = document.createElement("tr");
+    tr.appendChild(td);
+    tbody.replaceChildren(tr);
   }
 }
 

@@ -162,20 +162,22 @@ class QueryService:
                 event="error",
                 data={"error": {"code": exc.code, "stage": exc.stage, "message": exc.message}},
             )
-        except Exception as exc:  # unclassified: still never a bare RAG_ERROR
+        except Exception:  # unclassified: still never a bare RAG_ERROR
             stage = trace.current_stage or QueryStage.LLM_GENERATION.value
             trace.error_stage = stage
             trace.finish_stages()
             trace.latency_ms = int((time.monotonic() - started) * 1000)
             logger.exception("query failed at stage %s", stage)
             await self._save_trace(trace)
+            # 对外只给分类码与阶段；异常原文可能含上游响应体 / SQL 片段 /
+            # 文件路径，只写日志，绝不推给客户端（SSE 无法靠中间件兜底）。
             yield QueryEvent(
                 event="error",
                 data={
                     "error": {
                         "code": "INTERNAL_ERROR",
                         "stage": stage,
-                        "message": str(exc),
+                        "message": "internal error while processing the query",
                     }
                 },
             )
@@ -240,10 +242,7 @@ class QueryService:
 
         trace.start_stage(QueryStage.RERANKING.value)
         ranked_pairs = await self._rerank.rank_many(
-            [
-                (sq.id, sq.query, result.candidates)  # type: ignore[union-attr]
-                for (sq, _filters), result in zip(planned, retrieval_results, strict=True)
-            ],
+            self._rerank_batches(planned, retrieval_results),
             rows_by_id,
         )
 
@@ -273,6 +272,31 @@ class QueryService:
             query, built.text, conversation_context, evidence, trace, answer_parts
         ):
             yield event
+
+    @staticmethod
+    def _rerank_batches(
+        planned: list[tuple[SubQuery, object]],
+        retrieval_results: list[HybridResult],
+    ) -> list[tuple[str, str, list[tuple[str, float]]]]:
+        """Sub-query rerank inputs with cross-sub-query duplicate removal.
+
+        Candidates are deduped globally (keeping the best RRF score) so a
+        chunk recalled by several sub-queries is sent to the reranker once
+        instead of N times. Each sub-query still gets its own request, so the
+        per-sub-query Trace grouping in 06 section 9 is preserved.
+        """
+        seen: dict[str, float] = {}
+        batches: list[tuple[str, str, list[tuple[str, float]]]] = []
+        for (sq, _filters), result in zip(planned, retrieval_results, strict=True):
+            unique: list[tuple[str, float]] = []
+            for cid, score in result.candidates:
+                best = seen.get(cid)
+                if best is not None and best >= score:
+                    continue
+                seen[cid] = score
+                unique.append((cid, score))
+            batches.append((sq.id, sq.query, unique))
+        return batches
 
     @staticmethod
     def _record_retrieval(

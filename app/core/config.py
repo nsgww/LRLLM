@@ -4,7 +4,54 @@
 06-检索规范 第12节的规定，且必须保持可配置状态，绝不能硬编码。
 """
 
+from __future__ import annotations
+
+from urllib.parse import urlparse
+
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# 私网 / 保留网段前缀：出站 base_url 不得指向这些地址（防 SSRF 与云元数据探测）
+_BLOCKED_HOST_PREFIXES = (
+    "169.254.",  # link-local / 云元数据 169.254.169.254
+    "127.",      # loopback
+    "0.",
+    "10.",
+    "192.168.",
+)
+
+# loopback 与私网段的精确匹配项
+_BLOCKED_HOSTS = frozenset({"localhost", "::1", "[::1]", "0.0.0.0", "metadata.google.internal"})
+
+
+def _is_private_host(host: str) -> bool:
+    h = host.strip().lower()
+    if h in _BLOCKED_HOSTS:
+        return True
+    if any(h.startswith(p) for p in _BLOCKED_HOST_PREFIXES):
+        return True
+    # 172.16.0.0/12
+    if h.startswith("172."):
+        parts = h.split(".")
+        if len(parts) > 1 and parts[1].isdigit() and 16 <= int(parts[1]) <= 31:
+            return True
+    return False
+
+
+def _validate_outbound_base_url(value: str | None) -> str | None:
+    """出站 provider 地址必须显式配置、使用 http(s)、且不得指向私网。
+
+    这是 SSRF 防线：配置被注入为内网地址时，服务不会带着 API Key 去访问。
+    如需在内网部署自建推理服务，设置 RAG_ALLOW_PRIVATE_BASE_URL=true 显式放行。
+    """
+    if value is None or not value.strip():
+        return value
+    parsed = urlparse(value)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"base_url must use http/https, got scheme '{parsed.scheme}'")
+    if not parsed.hostname:
+        raise ValueError(f"base_url has no host: {value!r}")
+    return value
 
 
 class Settings(BaseSettings):
@@ -16,6 +63,16 @@ class Settings(BaseSettings):
 
     app_name: str = "private-knowledge-rag"
     api_prefix: str = "/v1"
+
+    # 安全：可选 API Key。为空时关闭鉴权（保持单机开发体验），
+    # 一旦设置则所有 /v1 写操作与查询都要求 Authorization: Bearer <key>。
+    api_key: str = ""
+    # 显式放行私网 base_url（内网自建推理服务场景）
+    allow_private_base_url: bool = False
+    # 上传单文件大小上限
+    max_upload_bytes: int = 50 * 1024 * 1024
+    # /v1/query 全局并发上限（保护 LLM 配额与连接池）
+    query_max_concurrency: int = 8
 
     # infrastructure
     postgres_dsn: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/rag"
@@ -94,6 +151,33 @@ class Settings(BaseSettings):
 
     # background physical cleanup
     cleanup_batch_size: int = 200
+
+    @field_validator("llm_base_url", "embedding_base_url", "reranker_base_url")
+    @classmethod
+    def _check_base_url(cls, value: str | None) -> str | None:
+        _validate_outbound_base_url(value)
+        return value
+
+    def outbound_host_issues(self) -> list[str]:
+        """私网 base_url 检查。单独成方法是因为校验器读不到兄弟字段
+        （allow_private_base_url），必须等 Settings 实例化完成后才能判断。"""
+        if self.allow_private_base_url:
+            return []
+        issues: list[str] = []
+        for name, url in (
+            ("llm_base_url", self.llm_base_url),
+            ("embedding_base_url", self.embedding_base_url),
+            ("reranker_base_url", self.reranker_base_url),
+        ):
+            if not url:
+                continue
+            host = urlparse(url).hostname or ""
+            if _is_private_host(host):
+                issues.append(
+                    f"{name}={url!r} points at private/reserved host '{host}'; "
+                    "set RAG_ALLOW_PRIVATE_BASE_URL=true if this is intentional"
+                )
+        return issues
 
 
 def get_settings() -> Settings:

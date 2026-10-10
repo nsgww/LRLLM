@@ -143,6 +143,13 @@ CREATE INDEX idx_chunks_heading_trgm ON chunks USING GIN (heading_path gin_trgm_
 -- 5. Weighted tsvector maintenance
 CREATE OR REPLACE FUNCTION chunks_search_tsv_trigger() RETURNS trigger AS $$
 BEGIN
+    -- 父块只用于 Context 全文扩展，关键字检索永远排除 is_parent = true
+    -- （见 _FTS_SQL / _TRGM_SQL），因此不构建 tsvector：省下 GIN 索引
+    -- 体积与每次写入的 to_tsvector 开销。
+    IF NEW.is_parent THEN
+        NEW.search_tsv := NULL;
+        RETURN NEW;
+    END IF;
     NEW.search_tsv :=
         setweight(to_tsvector('simple', coalesce(NEW.heading_path, '')), 'A') ||
         setweight(to_tsvector('simple', coalesce(NEW.product, '')), 'A') ||

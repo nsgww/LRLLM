@@ -2,11 +2,40 @@
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 
-from app.api.deps import require_kb_id
+from app.api.deps import require_api_key, require_kb_id
 from app.api.pagination import decode_cursor, next_cursor
 from app.api.schemas import DocumentOut, Page, UploadOut
+from app.core.config import get_settings
+from app.core.errors import AppError
 
-router = APIRouter(tags=["documents"])
+router = APIRouter(tags=["documents"], dependencies=[Depends(require_api_key)])
+
+# 分块读取大小：既保证内存占用可控，又避免过多小读
+_READ_CHUNK = 1 << 20  # 1 MiB
+
+
+async def _read_upload(file: UploadFile) -> bytes:
+    """流式读取上传内容，超过上限立即中止（413）。
+
+    直接 `await file.read()` 会把整个文件拉进内存——一个 2GB 的上传
+    即可让进程 OOM。这里按块累计，超限即刻拒绝，不再继续读取。
+    """
+    limit = get_settings().max_upload_bytes
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(_READ_CHUNK)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise AppError(
+                code="FILE_TOO_LARGE",
+                message=f"file exceeds the {limit} byte upload limit",
+                http_status=413,
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _doc_out(row) -> DocumentOut:
@@ -44,7 +73,7 @@ async def upload_document(
     source: str | None = Form(default=None),
     kb_id: str = Depends(require_kb_id),
 ) -> UploadOut:
-    content = await file.read()
+    content = await _read_upload(file)
     metadata = {
         key: value
         for key, value in {

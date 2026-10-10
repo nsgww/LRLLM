@@ -124,6 +124,27 @@ class QdrantVectorStore:
             points_selector=qm.PointIdsList(points=chunk_ids),
         )
 
+    async def delete_by_knowledge_base(self, knowledge_base_id: str) -> None:
+        """服务端按 payload 过滤删除整个知识库的向量（05 节 5）。
+
+        传 chunk_id 列表会把整个知识库的 id 拉进内存；filter selector
+        由 Qdrant 在服务端匹配，O(1) 网络流量。
+        """
+        await self._client.delete(
+            collection_name=self._collection,
+            points_selector=qm.FilterSelector(
+                filter=qm.Filter(
+                    must=[
+                        qm.FieldCondition(
+                            key="knowledge_base_id",
+                            match=qm.MatchValue(value=knowledge_base_id),
+                        )
+                    ]
+                )
+            ),
+            wait=True,
+        )
+
     async def list_point_ids(self, batch: int = 1000) -> list[str]:
         """All point ids, for orphan reconciliation against PostgreSQL chunks."""
         ids: list[str] = []

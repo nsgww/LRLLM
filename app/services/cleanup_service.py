@@ -69,10 +69,11 @@ class CleanupService:
     async def reconcile_orphans(self) -> int:
         """Delete Qdrant points whose chunk row no longer exists (09 section 11).
 
-        Chunk ids are streamed in batches so the reconciliation does not load
-        the entire chunks table into memory.
+        Chunk ids are streamed in batches so reconciliation does not load the
+        whole chunks table into memory. The point-id set is built once (not
+        per batch) — rebuilding it inside the loop is O(batches × points).
         """
-        point_ids = await self._vector_store.list_point_ids()
+        point_ids = set(await self._vector_store.list_point_ids())
         if not point_ids:
             return 0
         known: set[str] = set()
@@ -82,7 +83,7 @@ class CleanupService:
                 known.update(batch)
                 # Point ids are the same set; stop early once every point is
                 # accounted for.
-                if set(point_ids) <= known:
+                if point_ids <= known:
                     break
         orphans = [point_id for point_id in point_ids if point_id not in known]
         if orphans:

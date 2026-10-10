@@ -244,32 +244,54 @@ class IngestionPipeline:
                 # 只有真正被子块引用的父块才落库（代码/表格子块无父块，
                 # 第二遍聚合中未被引用的块也不需要成行）。父块必须先于
                 # 子块插入，子块的 parent_chunk_id 外键才能解析。
+                #
+                # 用 ordinal 而非 id(obj) 做键：id() 依赖对象地址，
+                # 在列表释放后就失效，且不可读。
                 parent_objs: list[SemanticChunk] = []
-                parent_id_by_obj: dict[int, str] = {}
+                parent_ordinal: dict[int, int] = {}  # id(node.parent) -> ordinal
+                parent_of_node: list[int | None] = []
                 for node in nodes:
-                    if node.parent is not None and id(node.parent) not in parent_id_by_obj:
-                        parent_id_by_obj[id(node.parent)] = ""
+                    if node.parent is None:
+                        parent_of_node.append(None)
+                        continue
+                    key = id(node.parent)
+                    ordinal = parent_ordinal.get(key)
+                    if ordinal is None:
+                        ordinal = len(parent_objs)
+                        parent_ordinal[key] = ordinal
                         parent_objs.append(node.parent)
+                    parent_of_node.append(ordinal)
+
+                # heading_path -> section_id 只解析一次（原先每个 chunk 各查一次）
+                section_id_cache: dict[tuple[str, ...], str | None] = {}
+
+                def _section_for(sc: SemanticChunk) -> str | None:
+                    key = tuple(sc.heading_path)
+                    if key not in section_id_cache:
+                        section_id_cache[key] = _find_section_id(
+                            sc.heading_path, section_id_by_path
+                        )
+                    return section_id_cache[key]
+
                 parent_rows = [
                     _to_chunk(
                         sc,
                         index=index,
                         document_id=document_id,
                         knowledge_base_id=str(document.knowledge_base_id),
-                        section_id=_find_section_id(sc.heading_path, section_id_by_path),
+                        section_id=_section_for(sc),
                         product=resolved.product,
                         version=resolved.version,
                         is_parent=True,
                     )
                     for index, sc in enumerate(parent_objs)
                 ]
+                parent_id_by_ordinal: dict[int, str] = {}
                 if parent_rows:
-                    for obj, row_id in zip(
-                        parent_objs,
-                        await chunks_repo.bulk_create(parent_rows),
-                        strict=True,
+                    for ordinal, row_id in enumerate(
+                        await chunks_repo.bulk_create(parent_rows)
                     ):
-                        parent_id_by_obj[id(obj)] = row_id
+                        parent_id_by_ordinal[ordinal] = row_id
 
                 semantic_chunks = [node.child for node in nodes]
                 chunks = [
@@ -278,14 +300,14 @@ class IngestionPipeline:
                         index=len(parent_objs) + index,
                         document_id=document_id,
                         knowledge_base_id=str(document.knowledge_base_id),
-                        section_id=_find_section_id(sc.heading_path, section_id_by_path),
+                        section_id=_section_for(sc),
                         product=resolved.product,
                         version=resolved.version,
                         embedding_model=self._embedding.model_name,
                         embedding_model_version=self._embedding.model_version,
                         parent_chunk_id=(
-                            parent_id_by_obj.get(id(nodes[index].parent))
-                            if nodes[index].parent is not None
+                            parent_id_by_ordinal[parent_of_node[index]]
+                            if parent_of_node[index] is not None
                             else None
                         ),
                     )
@@ -422,27 +444,42 @@ def _build_sections(
     its structural heading path. Parents are expressed as indices because
     database ids do not exist until the rows are flushed; comparing the raw
     path tuples avoids the ambiguity of splitting a " / "-joined string.
+
+    "Next heading of same-or-higher level" is resolved with a monotonic stack
+    in O(H) instead of a nested scan, so a manual with thousands of headings
+    no longer costs O(H²).
     """
     headings = [b for b in blocks if b.type == BlockType.HEADING]
+    if not headings:
+        return [], [], []
+
+    # 文档最后一行：只需要算一次（原先在循环里对每个末位标题重算）
+    last_line = max((b.line_end for b in blocks), default=headings[0].line_end)
+
+    # 单调栈：栈内 level 严格递增；遇到 level <= 栈顶时，
+    # 栈顶那个标题的「下一个同级或更高级标题」就是当前标题。
+    next_sibling: list[int | None] = [None] * len(headings)
+    stack: list[tuple[int, int]] = []  # (level, index)
+    for index, block in enumerate(headings):
+        level = block.level if block.level is not None else 1
+        while stack and stack[-1][0] >= level:
+            _, popped = stack.pop()
+            next_sibling[popped] = index
+        stack.append((level, index))
+
     sections: list[Section] = []
     parent_offsets: list[int | None] = []
     section_paths: list[tuple[str, ...]] = []
+    # heading_path -> 最近一次出现的 section 下标，父节点查找 O(1)
+    path_index: dict[tuple[str, ...], int] = {}
+
     for order, block in enumerate(headings):
-        line_end = block.line_end
-        for later in headings[order + 1 :]:
-            if later.level is not None and block.level is not None and later.level <= block.level:
-                line_end = later.line_start - 1
-                break
-        else:
-            line_end = max((b.line_end for b in blocks), default=block.line_end)
+        nxt = next_sibling[order]
+        line_end = headings[nxt].line_start - 1 if nxt is not None else last_line
 
         path = tuple(block.heading_path)
-        parent_path = path[:-1]
-        parent_index = None
-        for index in range(len(section_paths) - 1, -1, -1):
-            if section_paths[index] == parent_path:
-                parent_index = index
-                break
+        parent_index = path_index.get(path[:-1])
+        path_index[path] = order
 
         sections.append(
             Section(
