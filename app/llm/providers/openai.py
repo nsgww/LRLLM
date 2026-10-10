@@ -10,6 +10,7 @@ from collections.abc import AsyncIterator
 import httpx
 
 from app.core.errors import AppError, QueryStage
+from app.core.retry import with_retry
 from app.llm.interface import Message
 
 
@@ -20,9 +21,13 @@ class OpenAILLM:
         api_key: str,
         base_url: str | None = None,
         timeout: float = 120.0,
+        max_attempts: int = 3,
+        retry_backoff: float = 1.0,
     ) -> None:
         self._model = model
         self._base_url = (base_url or "https://api.openai.com/v1").rstrip("/")
+        self._max_attempts = max_attempts
+        self._retry_backoff = retry_backoff
         self._client = httpx.AsyncClient(
             timeout=timeout,
             headers={"Authorization": f"Bearer {api_key}"},
@@ -36,10 +41,14 @@ class OpenAILLM:
             **kwargs,
         }
         try:
-            response = await self._client.post(
-                f"{self._base_url}/chat/completions", json=payload
+            response = await with_retry(
+                lambda: self._client.post(
+                    f"{self._base_url}/chat/completions", json=payload
+                ),
+                max_attempts=self._max_attempts,
+                backoff_seconds=self._retry_backoff,
+                description="LLM generate",
             )
-            response.raise_for_status()
         except httpx.HTTPError as exc:
             raise AppError(
                 code="LLM_REQUEST_FAILED",

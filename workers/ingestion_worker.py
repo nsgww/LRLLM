@@ -1,7 +1,6 @@
 """入库 Worker（04-ingestion-pipeline-spec 第 3 节）。
 
 上传/重建只创建任务，由本 Worker 执行管线。
-v0.1 假定单 Worker 实例（不做任务抢占竞争处理）。
 
 取任务的方式：优先 BLPOP Redis 队列（秒级响应）；队列空或 Redis
 不可用时回退到周期扫库（退避重试、超时回收、孤儿清理），
@@ -10,6 +9,9 @@ PostgreSQL 始终是任务的唯一事实来源。
 韧性（04 节 34 / 09 节 11）：
 - Worker 崩溃遗留的 RUNNING 任务会被回收重试；
 - 瞬时失败按退避重排，最多 `ingestion_max_attempts` 次。
+
+Concurrency: ``claim_pending`` uses ``FOR UPDATE SKIP LOCKED`` so multiple
+worker replicas co-exist without processing the same job twice.
 
 Run: python -m workers.ingestion_worker
 """
@@ -71,27 +73,32 @@ async def reclaim_stale_jobs(
             await session.commit()
 
 
-async def _process_job(pipeline: IngestionPipeline, job_id: str) -> None:
-    """执行单个任务；管线内部幂等，队列与扫库重复拾取是安全的。"""
-    try:
-        result = await pipeline.process(job_id)
-        logger.info(
-            "job %s -> %s (sections=%s chunks=%s embeddings=%s skipped=%s)",
-            result.job_id,
-            result.status.value,
-            result.section_count,
-            result.chunk_count,
-            result.embedding_count,
-            result.skipped,
-        )
-    except Exception:
-        logger.exception("job %s failed", job_id)
+async def claim_due_jobs(
+    session_factory: async_sessionmaker[AsyncSession],
+    limit: int,
+) -> list[str]:
+    """Claim due PENDING jobs atomically and return their ids.
+
+    The claim (with row locks) must be committed before processing starts so
+    the locks are released and other workers can move on.
+    """
+    async with session_factory() as session:
+        rows = await IngestionJobRepository(session).claim_pending(limit)
+        job_ids = [str(row.id) for row in rows]
+        await session.commit()
+        return job_ids
 
 
 async def run() -> None:
     settings = get_settings()
     setup_logging()
-    init_engine(settings.postgres_dsn)
+    init_engine(
+        settings.postgres_dsn,
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+        pool_timeout=settings.db_pool_timeout,
+        pool_recycle=settings.db_pool_recycle,
+    )
     session_factory = get_session_factory()
     await validate_embedding_consistency(session_factory, settings)
 
@@ -109,6 +116,9 @@ async def run() -> None:
         dimension=settings.embedding_dimension,
         api_key=settings.embedding_api_key,
         base_url=settings.embedding_base_url,
+        timeout=settings.embedding_timeout_seconds,
+        max_attempts=settings.provider_max_attempts,
+        retry_backoff=settings.provider_retry_backoff_seconds,
     )
     pipeline = IngestionPipeline(
         session_factory=session_factory,
@@ -118,15 +128,16 @@ async def run() -> None:
     )
     cleanup = CleanupService(session_factory, vector_store, settings.cleanup_batch_size)
     queue = IngestionQueue(settings.redis_url, settings.redis_queue_enabled)
+    concurrency = max(1, settings.ingestion_worker_concurrency)
 
-    logger.info("ingestion worker started")
+    logger.info("ingestion worker started (concurrency=%s)", concurrency)
     try:
         await cleanup.reconcile_orphans()
         while True:
             # 快速通道：队列有任务就连续消费，没有则等一个轮询周期
             job_id = await queue.dequeue(settings.ingestion_poll_interval_seconds)
             if job_id is not None:
-                await _process_job(pipeline, job_id)
+                await process_job(pipeline, job_id)
                 continue
             # 队列空（或 Redis 不可用）：周期扫库兜底
             await reclaim_stale_jobs(session_factory, settings)
@@ -137,17 +148,34 @@ async def run() -> None:
                     report.chunks_purged,
                     report.documents_purged,
                 )
-            async with session_factory() as session:
-                jobs = await IngestionJobRepository(session).list_pending()
-            for job in jobs:
-                await _process_job(pipeline, str(job.id))
-            # 队列可用时 dequeue 已阻塞等待一个周期；不可用需自行休眠防空转
+            # DB 兜底：原子抢占一批到期任务（FOR UPDATE SKIP LOCKED），
+            # 并发处理以压榨外部 API 的等待时间。
+            job_ids = await claim_due_jobs(session_factory, limit=concurrency)
+            if job_ids:
+                await asyncio.gather(*(process_job(pipeline, job_id) for job_id in job_ids))
+            # 队列可用时 dequeue 已阻塞等待一个周期；不可用时需自行休眠防空转
             if not queue.usable:
                 await asyncio.sleep(settings.ingestion_poll_interval_seconds)
     finally:
         await queue.aclose()
         await embedding.aclose()
         await vector_store.aclose()
+
+
+async def process_job(pipeline: IngestionPipeline, job_id: str) -> None:
+    try:
+        result = await pipeline.process(job_id)
+        logger.info(
+            "job %s -> %s (sections=%s chunks=%s embeddings=%s skipped=%s)",
+            result.job_id,
+            result.status.value,
+            result.section_count,
+            result.chunk_count,
+            result.embedding_count,
+            result.skipped,
+        )
+    except Exception:
+        logger.exception("job %s failed", job_id)
 
 
 if __name__ == "__main__":

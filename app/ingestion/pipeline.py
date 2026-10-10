@@ -22,7 +22,11 @@ from app.domain.document import DocumentStatus
 from app.domain.ingestion import ASTBlock, BlockType, JobStatus
 from app.domain.section import Section
 from app.embedding.interface import EmbeddingModel
-from app.ingestion.chunkers.semantic import ParentChunkNode, SemanticChunk, SemanticChunker
+from app.ingestion.chunkers.semantic import (
+    ParentChunkNode,
+    SemanticChunk,
+    SemanticChunker,
+)
 from app.ingestion.chunkers.semantic_split import EmbeddingSentenceSplitter
 from app.ingestion.metadata import resolve_metadata
 from app.ingestion.parsers import parser_for
@@ -399,7 +403,7 @@ def _processing_fingerprint(
     embedding_model_version: str,
 ) -> str:
     """04 section 5: content + parser + chunker + embedding model version."""
-    raw = "|".join([content_hash, parser_version, chunker_version, embedding_model_version])
+    raw = f"{content_hash}|{parser_version}|{chunker_version}|{embedding_model_version}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 

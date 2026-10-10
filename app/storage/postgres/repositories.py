@@ -6,11 +6,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.core.ids import parse_uuid
-
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.ids import parse_uuid
 from app.domain.chunk import Chunk
 from app.domain.document import Document, DocumentStatus
 from app.domain.ingestion import IngestionJob, JobStatus
@@ -319,13 +318,19 @@ class SectionRepository:
         return [str(r.id) for r in rows]
 
     async def update_parents(self, pairs: list[tuple[str, str]]) -> None:
-        """Second pass: parent ids are unknown until the rows are flushed."""
-        for child_id, parent_id in pairs:
-            await self._session.execute(
-                sa.update(SectionRow)
-                .where(SectionRow.id == parse_uuid(child_id))
-                .values(parent_section_id=parse_uuid(parent_id))
-            )
+        """Second pass: parent ids are unknown until the rows are flushed.
+
+        Batched into a single CASE expression instead of one UPDATE per row.
+        """
+        if not pairs:
+            return
+        child_col = SectionRow.id
+        whens = [(child_col == parse_uuid(child), parse_uuid(parent)) for child, parent in pairs]
+        await self._session.execute(
+            sa.update(SectionRow)
+            .where(child_col.in_([parse_uuid(child) for child, _ in pairs]))
+            .values(parent_section_id=sa.case(*whens, else_=SectionRow.parent_section_id))
+        )
 
     async def delete_by_document(self, document_id: str) -> None:
         await self._session.execute(
@@ -426,6 +431,23 @@ class ChunkRepository:
         stmt = sa.select(ChunkRow.id)
         return [str(r) for r in (await self._session.execute(stmt)).scalars().all()]
 
+    async def iter_id_batches(self, batch_size: int = 5000):
+        """Yield chunk id batches via keyset pagination.
+
+        Orphan reconciliation only needs set membership; streaming by id avoids
+        loading the whole table into memory at once.
+        """
+        last_id = None
+        while True:
+            stmt = sa.select(ChunkRow.id).order_by(ChunkRow.id).limit(batch_size)
+            if last_id is not None:
+                stmt = stmt.where(ChunkRow.id > last_id)
+            rows = [r for r in (await self._session.execute(stmt)).scalars().all()]
+            if not rows:
+                return
+            yield [str(r) for r in rows]
+            last_id = rows[-1]
+
     async def delete_by_document(self, document_id: str) -> list[str]:
         """Physical cleanup. Returns deleted chunk ids for Qdrant cleanup."""
         rows = list(
@@ -525,6 +547,29 @@ class IngestionJobRepository:
             )
             .order_by(IngestionJobRow.created_at)
             .limit(limit)
+        )
+        return list((await self._session.execute(stmt)).scalars().all())
+
+    async def claim_pending(self, limit: int = 10) -> list[IngestionJobRow]:
+        """Atomically claim due PENDING jobs for this worker.
+
+        ``FOR UPDATE SKIP LOCKED`` lets multiple worker replicas poll safely:
+        each row is handed to exactly one worker, so a job is never processed
+        twice. The claim must be committed by the caller to release the locks.
+        """
+        now = datetime.now(UTC)
+        stmt = (
+            sa.select(IngestionJobRow)
+            .where(
+                IngestionJobRow.status == JobStatus.PENDING,
+                sa.or_(
+                    IngestionJobRow.next_attempt_at.is_(None),
+                    IngestionJobRow.next_attempt_at <= now,
+                ),
+            )
+            .order_by(IngestionJobRow.created_at)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
         )
         return list((await self._session.execute(stmt)).scalars().all())
 

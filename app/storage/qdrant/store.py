@@ -6,12 +6,16 @@
   在数据被调取后绝不会在内存中应用。
 """
 
+import logging
+
 from qdrant_client import AsyncQdrantClient
 from qdrant_client import models as qm
 
 from app.core.errors import AppError, QueryStage
 from app.domain.retrieval import MetadataFilter, RetrievalHit, RetrievalSource
 from app.storage.base import VectorPoint
+
+logger = logging.getLogger(__name__)
 
 PAYLOAD_INDEX_FIELDS = (
     "knowledge_base_id",
@@ -32,6 +36,10 @@ class QdrantVectorStore:
     async def aclose(self) -> None:
         await self._client.close()
 
+    async def health(self) -> None:
+        """Raise if Qdrant is unreachable (used by /health)."""
+        await self._client.get_collections()
+
     async def ensure_collection(self) -> None:
         if not await self._client.collection_exists(self._collection):
             await self._client.create_collection(
@@ -41,12 +49,26 @@ class QdrantVectorStore:
                     distance=qm.Distance.COSINE,
                 ),
             )
+        # Payload indexes are idempotent server-side, but re-issuing them on
+        # every boot is wasted round trips; only create the missing ones.
+        existing = await self._existing_payload_indexes()
         for field in PAYLOAD_INDEX_FIELDS:
+            if field in existing:
+                continue
             await self._client.create_payload_index(
                 collection_name=self._collection,
                 field_name=field,
                 field_schema=qm.PayloadSchemaType.KEYWORD,
             )
+
+    async def _existing_payload_indexes(self) -> set[str]:
+        try:
+            info = await self._client.get_collection(self._collection)
+            schema = getattr(info, "payload_schema", None) or {}
+            return set(schema.keys())
+        except Exception:
+            logger.warning("could not read payload schema; recreating indexes", exc_info=True)
+            return set()
 
     async def validate_dimension(self) -> None:
         """Startup check: collection vector size must equal the configured

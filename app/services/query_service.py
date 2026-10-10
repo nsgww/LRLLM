@@ -4,8 +4,15 @@
 混合检索 -> 重新排序 -> 证据验证 -> 上下文 -> 大型语言模型 ->
 基于上下文的答案。每个步骤均按 08-prompt-spec 第 5 节的规定进行回退，
 并记录在检索轨迹中。
+
+延迟优化：
+- Understanding 与 Rewrite 合并为一次结构化 LLM 调用（两者共享同一批
+  上下文，规范只要求各自有独立 fallback，未要求分两次请求）。
+- 多个 Sub-query 的 Filter / Hybrid Retrieval / Rerank 并发执行（06 第 9 节
+  只要求「独立检索、独立记录 Trace」，串行并非契约）。
 """
 
+import asyncio
 import logging
 import time
 import uuid
@@ -26,16 +33,17 @@ from app.llm.schemas import (
     QueryDecompositionOutput,
     QueryRewriteOutput,
     QueryUnderstandingOutput,
+    QueryUnderstandingRewriteOutput,
 )
 from app.retrieval.context.builder import ContextBuilder
 from app.retrieval.evidence import EvidenceChecker
 from app.retrieval.filters import build_metadata_filter
-from app.retrieval.hybrid import HybridRetriever
+from app.retrieval.hybrid import HybridResult, HybridRetriever
 from app.retrieval.planner import RetrievalStrategy, plan
 from app.retrieval.rerank import RerankService
 from app.storage.postgres.repositories import (
-    ConversationRepository,
     ChunkRepository,
+    ConversationRepository,
     DocumentRepository,
     QueryTraceRepository,
 )
@@ -92,7 +100,10 @@ class QueryService:
             )
             trace.conversation_id = conversation_id
 
-            understanding = await self._understand(query, conversation_context, known, trace)
+            rewritten, understanding = await self._understand_and_rewrite(
+                query, conversation_context, known, trace
+            )
+            trace.rewritten_query = rewritten
             trace.intent = understanding.intent.value
             trace.product = understanding.product
             trace.version = understanding.version
@@ -130,6 +141,7 @@ class QueryService:
                     yield event
 
             trace.final_answer = "".join(answer_parts)
+            trace.finish_stages()
             trace.latency_ms = int((time.monotonic() - started) * 1000)
             await self._persist(conversation_id, answer_id, trace)
 
@@ -143,6 +155,7 @@ class QueryService:
 
         except AppError as exc:
             trace.error_stage = exc.stage
+            trace.finish_stages()
             trace.latency_ms = int((time.monotonic() - started) * 1000)
             await self._save_trace(trace)
             yield QueryEvent(
@@ -152,8 +165,9 @@ class QueryService:
         except Exception as exc:  # unclassified: still never a bare RAG_ERROR
             stage = trace.current_stage or QueryStage.LLM_GENERATION.value
             trace.error_stage = stage
+            trace.finish_stages()
             trace.latency_ms = int((time.monotonic() - started) * 1000)
-            logger.exception("query failed at stage %s: %s", stage, exc)
+            logger.exception("query failed at stage %s", stage)
             await self._save_trace(trace)
             yield QueryEvent(
                 event="error",
@@ -176,8 +190,7 @@ class QueryService:
         trace: QueryTraceBuilder,
         answer_parts: list[str],
     ) -> AsyncIterator[QueryEvent]:
-        rewritten = await self._rewrite(query, understanding, conversation_context, trace)
-        trace.rewritten_query = rewritten
+        rewritten = trace.rewritten_query or query
 
         sub_queries = await self._decompose(rewritten, understanding, strategy, trace)
         trace.sub_queries = [
@@ -185,8 +198,9 @@ class QueryService:
             for sq in sub_queries
         ]
 
-        ranked_all: list[RankedChunk] = []
-        trace.current_stage = QueryStage.METADATA_FILTER.value
+        # One metadata-filter trace entry per sub-query, built before retrieval.
+        trace.start_stage(QueryStage.METADATA_FILTER.value)
+        planned: list[tuple[SubQuery, object]] = []
         for sq in sub_queries:
             filters = build_metadata_filter(knowledge_base_id, understanding, sq)
             trace.metadata_filters.append(
@@ -197,32 +211,57 @@ class QueryService:
                     "version": filters.version,
                 }
             )
-            trace.current_stage = QueryStage.VECTOR_RETRIEVAL.value
-            retrieval = await self._hybrid.retrieve(sq.query, filters, strategy)
-            degraded = []
-            if retrieval.vector_degraded:
-                degraded.append(QueryStage.VECTOR_RETRIEVAL.value)
-            if retrieval.keyword_degraded:
-                degraded.append(QueryStage.KEYWORD_RETRIEVAL.value)
-            trace.record_retrieval(
-                sq.id,
-                retrieval.vector_hits,
-                retrieval.keyword_hits,
-                retrieval.candidates,
-                degraded,
-            )
-            trace.current_stage = QueryStage.RERANKING.value
-            outcome = await self._rerank.rerank(sq.query, retrieval.candidates, sub_query_id=sq.id)
-            trace.reranker_fallback = trace.reranker_fallback or outcome.fallback
-            trace.record_reranked(sq.id, outcome.chunks)
-            ranked_all.extend(outcome.chunks)
+            planned.append((sq, filters))
 
-        trace.current_stage = QueryStage.EVIDENCE_CHECK.value
+        # Sub-queries are independent (06 section 9): retrieve them concurrently.
+        trace.start_stage(QueryStage.VECTOR_RETRIEVAL.value)
+        retrieval_results = await asyncio.gather(
+            *(
+                self._hybrid.retrieve(sq.query, filters, strategy)
+                for sq, filters in planned
+            ),
+            return_exceptions=True,
+        )
+        for (sq, _filters), result in zip(planned, retrieval_results, strict=True):
+            if isinstance(result, BaseException):
+                # HybridRetriever only raises when both paths fail
+                # (RETRIEVAL_UNAVAILABLE); that must fail the whole request.
+                raise result
+            self._record_retrieval(trace, sq.id, result)
+
+        # Load every sub-query's candidates in a single chunk query, then
+        # rerank the sub-queries concurrently.
+        all_candidate_ids = [
+            cid
+            for result in retrieval_results
+            for cid, _score in result.candidates  # type: ignore[union-attr]
+        ]
+        rows_by_id = await self._rerank.load_rows(all_candidate_ids)
+
+        trace.start_stage(QueryStage.RERANKING.value)
+        ranked_pairs = await self._rerank.rank_many(
+            [
+                (sq.id, sq.query, result.candidates)  # type: ignore[union-attr]
+                for (sq, _filters), result in zip(planned, retrieval_results, strict=True)
+            ],
+            rows_by_id,
+        )
+
+        ranked_all: list[RankedChunk] = []
+        for sq_id, outcome in ranked_pairs:
+            trace.reranker_fallback = trace.reranker_fallback or outcome.fallback
+            trace.record_reranked(sq_id, outcome.chunks)
+            ranked_all.extend(outcome.chunks)
+        # Restore deterministic order across sub-queries (gather preserves
+        # input order, but extend order should match sub-query declaration).
+        ranked_all.sort(key=lambda c: c.sub_query_id or "")
+
+        trace.start_stage(QueryStage.EVIDENCE_CHECK.value)
         evidence = await self._evidence.check(rewritten, ranked_all)
         trace.record_evidence(evidence)
         yield QueryEvent(event="evidence_status", data={"status": evidence.status.value})
 
-        trace.current_stage = QueryStage.CONTEXT_BUILDING.value
+        trace.start_stage(QueryStage.CONTEXT_BUILDING.value)
         built = self._context.build(
             ranked_all,
             version_specified=understanding.version is not None,
@@ -234,6 +273,23 @@ class QueryService:
             query, built.text, conversation_context, evidence, trace, answer_parts
         ):
             yield event
+
+    @staticmethod
+    def _record_retrieval(
+        trace: QueryTraceBuilder, sub_query_id: str, retrieval: HybridResult
+    ) -> None:
+        degraded = []
+        if retrieval.vector_degraded:
+            degraded.append(QueryStage.VECTOR_RETRIEVAL.value)
+        if retrieval.keyword_degraded:
+            degraded.append(QueryStage.KEYWORD_RETRIEVAL.value)
+        trace.record_retrieval(
+            sub_query_id,
+            retrieval.vector_hits,
+            retrieval.keyword_hits,
+            retrieval.candidates,
+            degraded,
+        )
 
     async def _conversation_setup(
         self,
@@ -259,6 +315,57 @@ class QueryService:
             lines.append(f"{speaker}: {row.content}")
         return conversation_id, "\n".join(lines) or "（无）", known
 
+    async def _understand_and_rewrite(
+        self,
+        query: str,
+        conversation_context: str,
+        known: list[dict],
+        trace: QueryTraceBuilder,
+    ) -> tuple[str, QueryUnderstanding]:
+        """Merged Understanding + Rewrite (one structured LLM call).
+
+        The two stages share the same inputs (raw query, conversation, known
+        products/versions); fusing them removes one round trip without losing
+        any contract. Fallbacks still follow 08 section 5 independently:
+        understanding -> conservative default, rewrite -> raw query.
+        """
+        trace.start_stage(QueryStage.QUERY_UNDERSTANDING.value)
+        template = await self._prompts.get("query_understanding_rewrite")
+        trace.record_prompt(template)
+        rendered = PromptLoader.render(
+            template,
+            {
+                "raw_query": query,
+                "conversation_context": conversation_context,
+                "known_products": ", ".join(sorted({k["product"] for k in known if k["product"]})) or "（空）",
+                "known_versions": "\n".join(
+                    f"{k['product']} {k['version']}" for k in known if k["product"]
+                ) or "（空）",
+            },
+        )
+        try:
+            output = await generate_json(
+                self._llm,
+                [{"role": "system", "content": rendered}],
+                QueryUnderstandingRewriteOutput,
+                QueryStage.QUERY_UNDERSTANDING,
+            )
+            understanding = QueryUnderstanding(
+                intent=output.intent,
+                knowledge_required=output.knowledge_required,
+                product=output.product,
+                version=normalize_version(output.version),
+                entities=output.entities,
+                constraints=output.constraints,
+            )
+            rewritten = output.rewritten_query or query
+        except AppError:
+            # 08 section 5: conservative default, never guess product/version.
+            trace.record_fallback(QueryStage.QUERY_UNDERSTANDING.value)
+            trace.record_fallback(QueryStage.QUERY_REWRITE.value)
+            return query, QueryUnderstanding(intent=Intent.EXACT_QA, knowledge_required=True)
+        return rewritten, understanding
+
     async def _understand(
         self,
         query: str,
@@ -266,7 +373,9 @@ class QueryService:
         known: list[dict],
         trace: QueryTraceBuilder,
     ) -> QueryUnderstanding:
-        trace.current_stage = QueryStage.QUERY_UNDERSTANDING.value
+        """Standalone understanding, retained for callers that need it in
+        isolation (evaluation replay / debugging)."""
+        trace.start_stage(QueryStage.QUERY_UNDERSTANDING.value)
         template = await self._prompts.get("query_understanding")
         trace.record_prompt(template)
         rendered = PromptLoader.render(
@@ -307,7 +416,8 @@ class QueryService:
         conversation_context: str,
         trace: QueryTraceBuilder,
     ) -> str:
-        trace.current_stage = QueryStage.QUERY_REWRITE.value
+        """Standalone rewrite, retained for callers that need it in isolation."""
+        trace.start_stage(QueryStage.QUERY_REWRITE.value)
         template = await self._prompts.get("query_rewrite")
         trace.record_prompt(template)
         rendered = PromptLoader.render(
@@ -348,7 +458,7 @@ class QueryService:
                     version=understanding.version,
                 )
             ]
-        trace.current_stage = QueryStage.QUERY_DECOMPOSITION.value
+        trace.start_stage(QueryStage.QUERY_DECOMPOSITION.value)
         template = await self._prompts.get("query_decomposition")
         trace.record_prompt(template)
         rendered = PromptLoader.render(
@@ -388,7 +498,7 @@ class QueryService:
         trace: QueryTraceBuilder,
         answer_parts: list[str],
     ) -> AsyncIterator[QueryEvent]:
-        trace.current_stage = QueryStage.LLM_GENERATION.value
+        trace.start_stage(QueryStage.LLM_GENERATION.value)
         template = await self._prompts.get("answer_generation")
         trace.record_prompt(template)
         rendered = PromptLoader.render(
@@ -411,7 +521,7 @@ class QueryService:
         trace: QueryTraceBuilder,
         answer_parts: list[str],
     ) -> AsyncIterator[QueryEvent]:
-        trace.current_stage = QueryStage.LLM_GENERATION.value
+        trace.start_stage(QueryStage.LLM_GENERATION.value)
         template = await self._prompts.get("general_answer")
         trace.record_prompt(template)
         rendered = PromptLoader.render(

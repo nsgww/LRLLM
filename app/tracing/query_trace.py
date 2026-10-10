@@ -4,6 +4,7 @@ Every request must be replayable from its trace: why these chunks were
 sent to the LLM, which filters applied, which prompts and versions ran.
 """
 
+import time
 import uuid
 from dataclasses import dataclass, field
 
@@ -36,11 +37,33 @@ class QueryTraceBuilder:
     final_answer: str | None = None
     prompt_versions: dict = field(default_factory=dict)
     fallbacks: list[str] = field(default_factory=list)
+    # Per-stage latency in ms (06 section 13: per_stage_latency).
+    stage_latencies: dict = field(default_factory=dict)
     # Stage the query is currently executing; used so an unclassified
     # exception is reported against the real stage (05 Non-Negotiable #6).
     current_stage: str | None = None
     error_stage: str | None = None
     latency_ms: int | None = None
+    _stage_started: float | None = field(default=None, repr=False, compare=False)
+
+    def start_stage(self, stage: str) -> None:
+        """Mark the beginning of a pipeline stage, closing any prior one."""
+        self._close_stage()
+        self.current_stage = stage
+        self._stage_started = time.monotonic()
+
+    def _close_stage(self) -> None:
+        if self._stage_started is None or self.current_stage is None:
+            return
+        elapsed = int((time.monotonic() - self._stage_started) * 1000)
+        self.stage_latencies[self.current_stage] = (
+            self.stage_latencies.get(self.current_stage, 0) + elapsed
+        )
+        self._stage_started = None
+
+    def finish_stages(self) -> None:
+        """Close the last open stage before persisting."""
+        self._close_stage()
 
     def record_prompt(self, template: PromptTemplate) -> None:
         self.prompt_versions[template.key] = template.version
@@ -119,6 +142,8 @@ class QueryTraceBuilder:
             "prompt_versions": self.prompt_versions or None,
             "error_stage": self.error_stage,
             "latency_ms": self.latency_ms,
+            # 06 section 13 / 09: per-stage breakdown for debugging.
+            "stage_latencies": self.stage_latencies or None,
         }
 
 

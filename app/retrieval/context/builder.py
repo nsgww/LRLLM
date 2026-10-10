@@ -49,7 +49,10 @@ class ContextBuilder:
         for chunk in chunks:
             cost = self._counter.count(_body(chunk, expand))
             if context.token_count + cost > budget:
-                continue
+                # 02 section 15: higher-ranked evidence wins. `chunks` is in
+                # score order, so the first unit that does not fit ends the
+                # selection rather than letting lower-ranked ones jump ahead.
+                break
             selected.append(chunk)
             context.token_count += cost
 

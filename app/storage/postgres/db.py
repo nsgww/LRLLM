@@ -11,9 +11,28 @@ _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
-def init_engine(dsn: str) -> AsyncEngine:
+def init_engine(
+    dsn: str,
+    *,
+    pool_size: int = 10,
+    max_overflow: int = 20,
+    pool_timeout: float = 30.0,
+    pool_recycle: int = 1800,
+) -> AsyncEngine:
+    """Create the engine with an explicit, configurable pool.
+
+    Defaults are tuned for a small async API + worker deployment; the SPA/worker
+    should override via settings when connection pressure grows.
+    """
     global _engine, _session_factory
-    _engine = create_async_engine(dsn, pool_pre_ping=True)
+    _engine = create_async_engine(
+        dsn,
+        pool_pre_ping=True,
+        pool_size=pool_size,
+        max_overflow=max_overflow,
+        pool_timeout=pool_timeout,
+        pool_recycle=pool_recycle,
+    )
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
     return _engine
 

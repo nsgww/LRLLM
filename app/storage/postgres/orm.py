@@ -205,6 +205,7 @@ class QueryTraceRow(Base):
     prompt_versions: Mapped[dict | None] = mapped_column(JSONB)
     error_stage: Mapped[str | None] = mapped_column(sa.Text)
     latency_ms: Mapped[int | None] = mapped_column(sa.Integer)
+    stage_latencies: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), server_default=sa.func.now())
 
 

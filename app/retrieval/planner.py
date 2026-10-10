@@ -21,15 +21,28 @@ class RetrievalStrategy:
 
 
 def plan(intent: Intent, settings: Settings) -> RetrievalStrategy:
-    base = dict(
-        top_k_vector=settings.top_k_vector,
-        top_k_keyword=settings.top_k_keyword,
-    )
+    base = {
+        "top_k_vector": settings.top_k_vector,
+        "top_k_keyword": settings.top_k_keyword,
+    }
     match intent:
-        case Intent.EXACT_QA | Intent.CAPABILITY | Intent.CONCEPT | Intent.DOCUMENT_ANALYSIS:
+        case Intent.EXACT_QA | Intent.CONCEPT | Intent.DOCUMENT_ANALYSIS:
             return RetrievalStrategy(name="hybrid_rerank", **base)
         case Intent.HOW_TO:
-            return RetrievalStrategy(name="hybrid_rerank", **base)
+            # 02 section 7: how_to benefits from step / example sections, so
+            # widen recall on both paths while keeping the same pipeline.
+            return RetrievalStrategy(
+                name="hybrid_rerank",
+                top_k_vector=settings.top_k_vector,
+                top_k_keyword=settings.top_k_keyword * 2,
+            )
+        case Intent.CAPABILITY:
+            # Evidence-focused retrieval: more vector recall, wide rerank input.
+            return RetrievalStrategy(
+                name="evidence_focused",
+                top_k_vector=settings.top_k_vector * 2,
+                top_k_keyword=settings.top_k_keyword,
+            )
         case Intent.SUMMARY:
             return RetrievalStrategy(
                 name="multi_section",

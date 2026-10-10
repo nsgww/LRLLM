@@ -234,6 +234,7 @@ CREATE TABLE query_traces (
     prompt_versions      JSONB,         -- {key: version}
     error_stage          TEXT,
     latency_ms           INT,
+    stage_latencies      JSONB,         -- {stage: ms} 06 section 13
     created_at           TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

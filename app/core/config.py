@@ -23,6 +23,21 @@ class Settings(BaseSettings):
     qdrant_collection: str = "chunks_v1"
     redis_url: str = "redis://localhost:6379/0"
 
+    # database connection pool
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_timeout: float = 30.0
+    db_pool_recycle: int = 1800
+
+    # provider HTTP timeouts (seconds)
+    llm_timeout_seconds: float = 120.0
+    embedding_timeout_seconds: float = 60.0
+    reranker_timeout_seconds: float = 30.0
+
+    # provider retry (transient network / 5xx / 429)
+    provider_max_attempts: int = 3
+    provider_retry_backoff_seconds: float = 1.0
+
     # llm
     llm_provider: str = "openai"
     llm_model: str = ""
@@ -75,6 +90,7 @@ class Settings(BaseSettings):
     ingestion_poll_interval_seconds: float = 2.0
     # Redis 任务队列快速通道（03 节技术选型）；关闭后 Worker 纯 DB 轮询
     redis_queue_enabled: bool = True
+    ingestion_worker_concurrency: int = 4
 
     # background physical cleanup
     cleanup_batch_size: int = 200

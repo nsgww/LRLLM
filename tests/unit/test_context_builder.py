@@ -60,15 +60,17 @@ def test_no_cap_no_boundary_when_version_specified():
     assert "===" not in built.text
 
 
-def test_token_budget_skips_but_keeps_scanning():
+def test_token_budget_stops_at_first_overflow():
+    """02 section 15: higher-ranked evidence wins, so the first unit that no
+    longer fits ends selection instead of letting lower-ranked ones jump in."""
     chunks = [
         _chunk("one", text="one two three"),    # 3 tokens, always kept (first)
-        _chunk("two", text="four five six"),    # 3 tokens, would exceed budget 5
-        _chunk("three", text="seven eight"),    # 2 tokens, fits in remaining 2
+        _chunk("two", text="four five six"),    # 3 tokens, exceeds remaining 2
+        _chunk("three", text="seven eight"),    # 2 tokens, would fit but ranks lower
     ]
     built = _builder(budget=5).build(chunks, version_specified=True)
-    assert [c.chunk_id for c in built.chunks] == ["one", "three"]
-    assert built.token_count == 5
+    assert [c.chunk_id for c in built.chunks] == ["one"]
+    assert built.token_count == 3
 
 
 def test_table_uses_raw_content_in_context():

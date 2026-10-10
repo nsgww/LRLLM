@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import sqlalchemy as sa
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -36,8 +37,8 @@ from app.retrieval.rerank import RerankService
 from app.services.conversation_service import ConversationService
 from app.services.ingestion_service import IngestionService
 from app.services.knowledge_base_service import KnowledgeBaseService
-from app.services.queue import IngestionQueue
 from app.services.query_service import QueryService
+from app.services.queue import IngestionQueue
 from app.storage.keyword.store import PostgresKeywordStore
 from app.storage.postgres.db import dispose_engine, get_session_factory, init_engine
 from app.storage.qdrant.store import QdrantVectorStore
@@ -49,7 +50,13 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        init_engine(settings.postgres_dsn)
+        init_engine(
+            settings.postgres_dsn,
+            pool_size=settings.db_pool_size,
+            max_overflow=settings.db_max_overflow,
+            pool_timeout=settings.db_pool_timeout,
+            pool_recycle=settings.db_pool_recycle,
+        )
         session_factory = get_session_factory()
 
         vector_store = QdrantVectorStore(
@@ -67,17 +74,26 @@ def create_app() -> FastAPI:
             dimension=settings.embedding_dimension,
             api_key=settings.embedding_api_key,
             base_url=settings.embedding_base_url,
+            timeout=settings.embedding_timeout_seconds,
+            max_attempts=settings.provider_max_attempts,
+            retry_backoff=settings.provider_retry_backoff_seconds,
         )
         llm = OpenAILLM(
             model=settings.llm_model,
             api_key=settings.llm_api_key,
             base_url=settings.llm_base_url,
+            timeout=settings.llm_timeout_seconds,
+            max_attempts=settings.provider_max_attempts,
+            retry_backoff=settings.provider_retry_backoff_seconds,
         )
         reranker = (
             HttpReranker(
                 base_url=settings.reranker_base_url or "",
                 model=settings.reranker_model,
                 api_key=settings.reranker_api_key,
+                timeout=settings.reranker_timeout_seconds,
+                max_attempts=settings.provider_max_attempts,
+                retry_backoff=settings.provider_retry_backoff_seconds,
             )
             if settings.reranker_provider != "none" and settings.reranker_base_url
             else None
@@ -89,6 +105,7 @@ def create_app() -> FastAPI:
         rerank_service = RerankService(reranker, session_factory, settings)
 
         app.state.session_factory = session_factory
+        app.state.vector_store = vector_store
         app.state.kb_service = KnowledgeBaseService(session_factory)
         queue = IngestionQueue(settings.redis_url, settings.redis_queue_enabled)
         app.state.ingestion_service = IngestionService(
@@ -144,7 +161,34 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     async def health() -> dict:
-        return {"status": "ok"}
+        """Liveness + dependency readiness.
+
+        Probes PostgreSQL and Qdrant so an orchestrator can distinguish a
+        live-but-broken instance from a healthy one. Returns 503 when a
+        dependency is unreachable.
+        """
+        checks: dict[str, str] = {}
+        ok = True
+
+        try:
+            async with app.state.session_factory() as session:
+                await session.execute(sa.text("SELECT 1"))
+            checks["postgres"] = "ok"
+        except Exception:  # noqa: BLE001 - any failure means the probe failed
+            checks["postgres"] = "error"
+            ok = False
+
+        try:
+            await app.state.vector_store.health()
+            checks["qdrant"] = "ok"
+        except Exception:  # noqa: BLE001 - any failure means the probe failed
+            checks["qdrant"] = "error"
+            ok = False
+
+        payload = {"status": "ok" if ok else "degraded", "checks": checks}
+        if not ok:
+            return JSONResponse(status_code=503, content=payload)
+        return payload
 
     # Web 前端：零依赖静态页面，由 FastAPI 直接托管（同源访问 /v1，无跨域问题）
     web_dir = Path(__file__).resolve().parent.parent / "web"
