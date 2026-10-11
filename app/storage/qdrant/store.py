@@ -174,9 +174,11 @@ class QdrantVectorStore:
                 message=f"query vector dimension {len(vector)} != {self._dimension}",
                 stage=QueryStage.VECTOR_RETRIEVAL,
             )
-        results = await self._client.search(
+        # client.search() was removed in qdrant-client >= 1.16; query_points is
+        # the supported universal query API.
+        response = await self._client.query_points(
             collection_name=self._collection,
-            query_vector=vector,
+            query=vector,
             query_filter=self._build_filter(filters),
             limit=top_k,
             with_payload=True,
@@ -189,5 +191,5 @@ class QdrantVectorStore:
                 source=RetrievalSource.VECTOR,
                 payload=dict(r.payload or {}),
             )
-            for r in results
+            for r in response.points
         ]

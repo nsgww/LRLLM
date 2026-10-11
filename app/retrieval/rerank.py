@@ -68,8 +68,13 @@ class RerankService:
         candidates: list[tuple[str, float]],
         rows_by_id: dict[str, object],
         sub_query_id: str | None = None,
+        use_reranker: bool = True,
     ) -> RerankOutcome:
-        """Rerank one sub-query against already-loaded rows."""
+        """Rerank one sub-query against already-loaded rows.
+
+        ``use_reranker=False`` (from the intent strategy) forces RRF order even
+        when a reranker is configured, and is not counted as a fallback.
+        """
         if not candidates:
             return RerankOutcome()
 
@@ -83,7 +88,7 @@ class RerankService:
         if not ordered_rows:
             return RerankOutcome()
 
-        if self._reranker is not None:
+        if self._reranker is not None and use_reranker:
             try:
                 results = await self._reranker.rerank(
                     query,
@@ -113,13 +118,14 @@ class RerankService:
                 _to_ranked(r, rrf_scores.get(str(r.id), 0.0), sub_query_id, parent_text_by_id)
                 for r in ordered_rows[:top_n]
             ],
-            fallback=self._reranker is not None,
+            fallback=self._reranker is not None and use_reranker,
         )
 
     async def rank_many(
         self,
         items: list[tuple[str, str, list[tuple[str, float]]]],
         rows_by_id: dict[str, object],
+        use_reranker: bool = True,
     ) -> list[tuple[str, RerankOutcome]]:
         """Rerank several sub-queries concurrently (06 section 9).
 
@@ -128,7 +134,13 @@ class RerankService:
         """
         outcomes = await asyncio.gather(
             *(
-                self.rank(query, candidates, rows_by_id, sub_query_id=sq_id)
+                self.rank(
+                    query,
+                    candidates,
+                    rows_by_id,
+                    sub_query_id=sq_id,
+                    use_reranker=use_reranker,
+                )
                 for sq_id, query, candidates in items
             ),
             return_exceptions=True,

@@ -53,12 +53,14 @@ class QueryTraceBuilder:
         """Mark the beginning of a pipeline stage, closing any prior one."""
         self._close_stage()
         self.current_stage = stage
-        self._stage_started = time.monotonic()
+        # perf_counter is high-resolution on all platforms (monotonic can tick
+        # at ~15ms on Windows, making short stages measure as 0).
+        self._stage_started = time.perf_counter()
 
     def _close_stage(self) -> None:
         if self._stage_started is None or self.current_stage is None:
             return
-        elapsed = int((time.monotonic() - self._stage_started) * 1000)
+        elapsed = int((time.perf_counter() - self._stage_started) * 1000)
         self.stage_latencies[self.current_stage] = (
             self.stage_latencies.get(self.current_stage, 0) + elapsed
         )

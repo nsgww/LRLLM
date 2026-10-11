@@ -337,6 +337,12 @@ class SectionRepository:
             sa.delete(SectionRow).where(SectionRow.document_id == parse_uuid(document_id))
         )
 
+    async def count_by_document(self, document_id: str) -> int:
+        stmt = sa.select(sa.func.count(SectionRow.id)).where(
+            SectionRow.document_id == parse_uuid(document_id)
+        )
+        return int((await self._session.execute(stmt)).scalar_one() or 0)
+
 
 class ChunkRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -409,6 +415,17 @@ class ChunkRepository:
             )
             .values(deleted_at=datetime.now(UTC))
         )
+
+    async def count_by_document(self, document_id: str, *, only_children: bool = False) -> int:
+        """Chunk count for a document. ``only_children`` counts embedded child
+        chunks (parent chunks are context-only and carry no vector)."""
+        stmt = sa.select(sa.func.count(ChunkRow.id)).where(
+            ChunkRow.document_id == parse_uuid(document_id),
+            ChunkRow.deleted_at.is_(None),
+        )
+        if only_children:
+            stmt = stmt.where(ChunkRow.is_parent.is_(False))
+        return int((await self._session.execute(stmt)).scalar_one() or 0)
 
     async def list_deleted_ids(self, limit: int = 200) -> list[str]:
         """Soft-deleted chunks awaiting asynchronous physical cleanup."""

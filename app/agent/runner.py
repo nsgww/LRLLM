@@ -115,7 +115,9 @@ class AgentRunner:
 
         事件顺序：meta → (tool_call)* → delta* → done，异常走 error。
         """
-        started = time.monotonic()
+        # perf_counter: high-resolution on all platforms; monotonic can tick at
+        # ~15ms on Windows, which breaks very small timeout budgets.
+        started = time.perf_counter()
         answer_id = str(uuid.uuid4())
         trace = QueryTraceBuilder(
             knowledge_base_id=knowledge_base_id,
@@ -141,7 +143,7 @@ class AgentRunner:
         except (LangChainUnavailableError, AppError) as exc:
             trace.error_stage = exc.stage
             trace.finish_stages()
-            trace.latency_ms = int((time.monotonic() - started) * 1000)
+            trace.latency_ms = int((time.perf_counter() - started) * 1000)
             await self._save_trace(trace)
             yield AgentEvent(
                 "error",
@@ -151,7 +153,7 @@ class AgentRunner:
             stage = trace.current_stage or AGENT_STAGE
             trace.error_stage = stage
             trace.finish_stages()
-            trace.latency_ms = int((time.monotonic() - started) * 1000)
+            trace.latency_ms = int((time.perf_counter() - started) * 1000)
             logger.exception("agent run failed at stage %s", stage)
             await self._save_trace(trace)
             yield AgentEvent(
@@ -241,7 +243,7 @@ class AgentRunner:
 
         trace.final_answer = final_text
         trace.finish_stages()
-        trace.latency_ms = int((time.monotonic() - started) * 1000)
+        trace.latency_ms = int((time.perf_counter() - started) * 1000)
         yield AgentEvent(
             "done",
             {"answer_id": answer_id, "steps": len(records), "mode": "agent"},
@@ -251,7 +253,7 @@ class AgentRunner:
     # -- 内部实现 ----------------------------------------------------------
 
     def _ensure_within_deadline(self, started: float) -> None:
-        if time.monotonic() - started > self._settings.agent_timeout_seconds:
+        if time.perf_counter() - started > self._settings.agent_timeout_seconds:
             raise AppError(
                 code="AGENT_TIMEOUT",
                 message="agent exceeded its time budget",

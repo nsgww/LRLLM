@@ -118,7 +118,11 @@ async def _list_documents(
 ) -> str:
     """列出知识库内的文档概览（标题 / 产品 / 版本 / 状态）。"""
     async with session_factory() as session:
-        rows = await DocumentRepository(session).list(knowledge_base_id, limit=200)
+        # DocumentRepository.list returns (rows, has_more); the agent tool only
+        # needs the overview rows, not pagination state.
+        rows, _has_more = await DocumentRepository(session).list(
+            knowledge_base_id, limit=200
+        )
     if not rows:
         return "该知识库当前没有任何文档。"
     lines: list[str] = []

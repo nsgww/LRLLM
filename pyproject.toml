@@ -16,6 +16,7 @@ dependencies = [
     "redis>=5.0",
     "httpx>=0.27",
     "tiktoken>=0.7",
+    "pyyaml>=6.0",
     "pypdf>=4",
     # Agent（自主工具调用）能力。仅 agent 路径使用，且为延迟导入：
     # 未安装时 /v1/query 等既有管道不受影响（见 app/agent/runner.py）。
@@ -40,3 +41,6 @@ include = ["app*", "workers*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "integration: tests that require live infrastructure (PostgreSQL/Qdrant)",
+]

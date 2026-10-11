@@ -13,11 +13,30 @@ from app.core.errors import IngestionError, IngestionErrorCode
 from app.core.versions import PARSER_VERSION
 from app.domain.ingestion import ASTBlock, BlockType, DocumentAST
 
+try:
+    import yaml
+except ImportError:  # pragma: no cover - yaml is a declared dependency
+    yaml = None
+
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
-_FENCE_RE = re.compile(r"^```")
+_FENCE_RE = re.compile(r"^(`{3,}|~{3,})")
 _LIST_ITEM_RE = re.compile(r"^(\s*)([-*+]|\d+\.)\s+")
 _QUOTE_RE = re.compile(r"^>\s?")
 _TABLE_ROW_RE = re.compile(r"^\|.*\|\s*$")
+_INDENTED_CODE_RE = re.compile(r"^(?: {4,}|\t)")
+
+
+def _fence_char(line: str) -> str | None:
+    """Return the fence character (`` ` `` or ``~``) opening a code fence."""
+    match = _FENCE_RE.match(line)
+    return match.group(1)[0] if match else None
+
+
+def _dedent_code(line: str) -> str:
+    """Strip one level of indentation (a tab or up to four spaces)."""
+    if line.startswith("\t"):
+        return line[1:]
+    return line[4:] if line.startswith("    ") else line.lstrip(" ")
 
 
 class MarkdownParser:
@@ -58,7 +77,25 @@ def _extract_front_matter(text: str) -> tuple[dict, str, int]:
 
 
 def _parse_front_matter(lines: list[str]) -> dict:
-    """Minimal 'key: value' parsing; no full YAML dependency in v0.1."""
+    """Front matter parsed as YAML (scalars, lists and nested maps).
+
+    Falls back to a minimal ``key: value`` parse when YAML is unavailable or
+    the block is malformed, so ingestion never fails on a bad header.
+    """
+    raw = "\n".join(lines)
+    if yaml is not None:
+        try:
+            parsed = yaml.safe_load(raw)
+            if isinstance(parsed, dict):
+                return {str(key): value for key, value in parsed.items() if value is not None}
+            return {}
+        except Exception:
+            pass  # malformed YAML: keep the forgiving fallback below
+    return _parse_front_matter_simple(lines)
+
+
+def _parse_front_matter_simple(lines: list[str]) -> dict:
+    """Minimal 'key: value' parsing kept as a no-dependency fallback."""
     data: dict = {}
     for line in lines:
         if ":" not in line or line.lstrip().startswith("#"):
@@ -115,9 +152,12 @@ def _parse_blocks(lines: list[str], start_line: int) -> list[ASTBlock]:
 
         path = [t for _, t in heading_stack]
 
-        if _FENCE_RE.match(line):
+        opening_char = _fence_char(line)
+        if opening_char:
             j = i + 1
-            while j < n and not _FENCE_RE.match(lines[j]):
+            # The closing fence must use the same character as the opening one
+            # (`` ``` `` fences do not close `` ~~~ `` blocks and vice versa).
+            while j < n and _fence_char(lines[j]) != opening_char:
                 j += 1
             end = j if j < n else n - 1  # include closing fence when present
             content = "\n".join(lines[i : end + 1])
@@ -147,6 +187,29 @@ def _parse_blocks(lines: list[str], start_line: int) -> list[ASTBlock]:
                 )
             )
             i = j
+            continue
+
+        # Indented code block: a run of lines indented by >= 4 spaces (or a
+        # tab) that is not a list item. Nested list items are handled by the
+        # list branch below, and continuation lines already belong to a list,
+        # so this only matches block starts (04 section 6).
+        if _INDENTED_CODE_RE.match(line) and not _LIST_ITEM_RE.match(line):
+            last = i
+            j = i
+            while j < n and (not lines[j].strip() or _INDENTED_CODE_RE.match(lines[j])):
+                if lines[j].strip():
+                    last = j
+                j += 1
+            blocks.append(
+                ASTBlock(
+                    type=BlockType.CODE_BLOCK,
+                    content="\n".join(_dedent_code(lines[k]) for k in range(i, last + 1)),
+                    heading_path=path,
+                    line_start=lineno,
+                    line_end=start_line + last,
+                )
+            )
+            i = last + 1
             continue
 
         if _LIST_ITEM_RE.match(line):

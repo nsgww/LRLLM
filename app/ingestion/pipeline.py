@@ -145,10 +145,28 @@ class IngestionPipeline:
                     document.status == DocumentStatus.READY
                     and document.processing_fingerprint == fingerprint
                 ):
-                    await jobs.update(job_id, JobStatus.SUCCEEDED, stage="HASH")
+                    # Reuse the existing counts so a skipped reindex still
+                    # reports what is indexed instead of zeros.
+                    sections_repo = SectionRepository(session)
+                    chunks_repo = ChunkRepository(session)
+                    child_count = await chunks_repo.count_by_document(
+                        document_id, only_children=True
+                    )
+                    section_count = await sections_repo.count_by_document(document_id)
+                    await jobs.update(
+                        job_id,
+                        JobStatus.SUCCEEDED,
+                        stage="HASH",
+                        section_count=section_count,
+                        chunk_count=child_count,
+                        embedding_count=child_count,
+                    )
                     await session.commit()
                     result.status = JobStatus.SUCCEEDED
                     result.skipped = True
+                    result.section_count = section_count
+                    result.chunk_count = child_count
+                    result.embedding_count = child_count
                     return result
 
                 await jobs.update(

@@ -244,6 +244,7 @@ class QueryService:
         ranked_pairs = await self._rerank.rank_many(
             self._rerank_batches(planned, retrieval_results),
             rows_by_id,
+            use_reranker=strategy.use_reranker,
         )
 
         ranked_all: list[RankedChunk] = []

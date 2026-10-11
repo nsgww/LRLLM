@@ -101,3 +101,54 @@ async def test_title_falls_back_to_first_heading():
     ast = await _parse(b"# Only Heading\n\nbody text\n")
     assert ast.title == "Only Heading"
     assert ast.metadata["front_matter"] == {}
+
+
+async def test_tilde_fenced_code_block():
+    source = b"# Doc\n\n~~~python\nprint('hi')\n~~~\n"
+    ast = await _parse(source)
+    code = next(b for b in ast.blocks if b.type == BlockType.CODE_BLOCK)
+    assert code.content.startswith("~~~python")
+    assert code.content.endswith("~~~")
+    assert "print('hi')" in code.content
+
+
+async def test_backtick_fence_does_not_close_tilde_block():
+    source = b"# Doc\n\n~~~\na\n```\nb\n~~~\n"
+    ast = await _parse(source)
+    code_blocks = [b for b in ast.blocks if b.type == BlockType.CODE_BLOCK]
+    assert len(code_blocks) == 1
+    # the ``` line is content inside the ~~~ block, not a closing fence
+    assert "```" in code_blocks[0].content
+    assert code_blocks[0].content.rstrip().endswith("~~~")
+
+
+async def test_indented_code_block():
+    source = b"# Doc\n\nIntro.\n\n    def f():\n        return 1\n"
+    ast = await _parse(source)
+    code = next(b for b in ast.blocks if b.type == BlockType.CODE_BLOCK)
+    assert "def f():" in code.content
+    assert "    return 1" in code.content  # inner indentation preserved
+
+
+async def test_indented_list_item_is_not_treated_as_code():
+    source = b"- item one\n- item two\n"
+    ast = await _parse(source)
+    list_block = next(b for b in ast.blocks if b.type == BlockType.LIST)
+    assert len(list_block.children) == 2
+
+
+async def test_front_matter_supports_lists_and_nested_maps():
+    source = (
+        b"---\n"
+        b"title: Guide\n"
+        b"product: MCP\n"
+        b"tags:\n  - api\n  - prompt\n"
+        b"meta:\n  owner: docs\n  lang: zh\n"
+        b"---\n\n# Guide\n\nbody\n"
+    )
+    ast = await _parse(source)
+    fm = ast.metadata["front_matter"]
+    assert fm["title"] == "Guide"
+    assert fm["product"] == "MCP"
+    assert fm["tags"] == ["api", "prompt"]
+    assert fm["meta"] == {"owner": "docs", "lang": "zh"}
