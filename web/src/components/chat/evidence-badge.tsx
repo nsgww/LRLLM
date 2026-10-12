@@ -29,7 +29,14 @@ const CONFIG: Record<
 
 export function EvidenceBadge({ status }: { status?: EvidenceStatus | null }) {
   if (!status) return null;
-  const config = CONFIG[status];
+  // Fallback so an unknown/新增 status from the API never crashes the tree.
+  const config =
+    CONFIG[status] ??
+    ({
+      label: status,
+      className:
+        "border-zinc-500/30 bg-zinc-500/10 text-zinc-600 dark:text-zinc-400",
+    } satisfies { label: string; className: string });
   return (
     <Badge variant="outline" className={cn("font-medium", config.className)}>
       {config.label}

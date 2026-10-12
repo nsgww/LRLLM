@@ -108,20 +108,28 @@ class QdrantVectorStore:
         return qm.Filter(must=must)
 
     async def upsert(self, points: list[VectorPoint]) -> None:
+        # wait=True: the pipeline marks the document READY only after upsert
+        # returns. Without it the write is async, so a READY document can be
+        # queried before its vectors are visible, and an indexing failure is
+        # never surfaced (qdrant-client defaults wait=False).
         await self._client.upsert(
             collection_name=self._collection,
             points=[
                 qm.PointStruct(id=p.chunk_id, vector=p.vector, payload=p.payload)
                 for p in points
             ],
+            wait=True,
         )
 
     async def delete(self, chunk_ids: list[str]) -> None:
         if not chunk_ids:
             return
+        # wait=True: cleanup relies on the point being gone before the PG row is
+        # hard-deleted; an async delete would let a crash leave an orphan point.
         await self._client.delete(
             collection_name=self._collection,
             points_selector=qm.PointIdsList(points=chunk_ids),
+            wait=True,
         )
 
     async def delete_by_knowledge_base(self, knowledge_base_id: str) -> None:

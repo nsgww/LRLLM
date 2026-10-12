@@ -29,6 +29,16 @@ export function useChat() {
   const [loadingHistory, setLoadingHistory] = React.useState(false);
   const abortRef = React.useRef<AbortController | null>(null);
 
+  // Abort any in-flight stream when the chat view unmounts (e.g. switching to
+  // the knowledge-base manager). Without this the request keeps running and
+  // holds a server-side query slot, and late deltas can bleed into a new view.
+  React.useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+      abortRef.current = null;
+    };
+  }, []);
+
   // Load conversation history (API returns newest-first; render chronologically).
   React.useEffect(() => {
     abortRef.current?.abort();

@@ -17,7 +17,7 @@ class DocumentStatus(str, Enum):
 class Document:
     knowledge_base_id: str
     title: str
-    content: str
+    content: bytes
     content_hash: str
     id: str | None = None
     doc_class: str | None = None

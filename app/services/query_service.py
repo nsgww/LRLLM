@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
 from app.core.errors import AppError, QueryStage
+from app.core.ids import assert_same_kb
 from app.domain.query import Intent, QueryUnderstanding, SubQuery
 from app.domain.retrieval import EvidenceResult, RankedChunk
 from app.ingestion.metadata import normalize_version
@@ -329,6 +330,16 @@ class QueryService:
                 conversation_id = str(conversation.id)
                 history = []
             else:
+                # 归属校验：禁止把别的 KB 的 conversation_id 传进来读取其历史
+                # 或向其中写入消息（跨 KB 会话注入 / 历史泄露）。
+                existing = await conversations.get(conversation_id)
+                if existing is None:
+                    raise AppError(
+                        code="CONVERSATION_NOT_FOUND",
+                        message=f"conversation {conversation_id} not found",
+                        http_status=404,
+                    )
+                assert_same_kb(existing, knowledge_base_id)
                 history = await conversations.recent_messages(conversation_id)
             await conversations.add_message(conversation_id, "USER", query)
             known = await DocumentRepository(session).distinct_product_versions(knowledge_base_id)
@@ -579,7 +590,7 @@ class QueryService:
             # tracing must never break the request path, but it must be visible
             logger.exception("failed to persist query trace for answer %s", trace.answer_id)
 
-    async def get_answer_evidence(self, answer_id: str) -> dict:
+    async def get_answer_evidence(self, answer_id: str, kb_id: str | None = None) -> dict:
         """On-demand evidence for an answer (05-api-spec section 9).
 
         Only SUPPORTED / PARTIALLY_SUPPORTED answers expose evidence.
@@ -592,6 +603,8 @@ class QueryService:
                     message=f"answer {answer_id} not found",
                     http_status=404,
                 )
+            if kb_id:
+                assert_same_kb(trace, kb_id)
             if (trace.evidence_status or "") not in ("SUPPORTED", "PARTIALLY_SUPPORTED"):
                 return {"answer_id": answer_id, "evidence": []}
 

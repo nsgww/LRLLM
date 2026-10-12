@@ -79,12 +79,12 @@ async def claim_due_jobs(
 ) -> list[str]:
     """Claim due PENDING jobs atomically and return their ids.
 
-    The claim (with row locks) must be committed before processing starts so
-    the locks are released and other workers can move on.
+    ``claim_pending`` flips the rows to RUNNING in the same statement, so the
+    commit below both persists the claim and releases the row locks; other
+    workers then see these jobs as RUNNING and skip them.
     """
     async with session_factory() as session:
-        rows = await IngestionJobRepository(session).claim_pending(limit)
-        job_ids = [str(row.id) for row in rows]
+        job_ids = await IngestionJobRepository(session).claim_pending(limit)
         await session.commit()
         return job_ids
 
@@ -92,6 +92,13 @@ async def claim_due_jobs(
 async def run() -> None:
     settings = get_settings()
     setup_logging()
+    # 出站地址安全校验与 API 进程一致：worker 会带着 embedding_api_key 访问
+    # base_url，私网/云元数据地址必须显式放行，否则拒绝启动（防 SSRF + 密钥外泄）。
+    host_issues = settings.outbound_host_issues()
+    if host_issues:
+        raise RuntimeError(
+            "unsafe outbound base_url configuration:\n  - " + "\n  - ".join(host_issues)
+        )
     init_engine(
         settings.postgres_dsn,
         pool_size=settings.db_pool_size,
@@ -132,7 +139,11 @@ async def run() -> None:
 
     logger.info("ingestion worker started (concurrency=%s)", concurrency)
     try:
-        await cleanup.reconcile_orphans()
+        try:
+            await cleanup.reconcile_orphans()
+        except Exception:
+            # 对账失败（如旧库尚未加 ON DELETE CASCADE）不能阻止 worker 启动
+            logger.exception("startup orphan reconciliation failed; continuing")
         while True:
             # 快速通道：队列有任务就连续消费，没有则等一个轮询周期
             job_id = await queue.dequeue(settings.ingestion_poll_interval_seconds)
@@ -140,14 +151,18 @@ async def run() -> None:
                 await process_job(pipeline, job_id)
                 continue
             # 队列空（或 Redis 不可用）：周期扫库兜底
-            await reclaim_stale_jobs(session_factory, settings)
-            report = await cleanup.run_once()
-            if report.chunks_purged or report.documents_purged:
-                logger.info(
-                    "cleanup purged chunks=%s documents=%s",
-                    report.chunks_purged,
-                    report.documents_purged,
-                )
+            try:
+                await reclaim_stale_jobs(session_factory, settings)
+                report = await cleanup.run_once()
+                if report.chunks_purged or report.documents_purged:
+                    logger.info(
+                        "cleanup purged chunks=%s documents=%s",
+                        report.chunks_purged,
+                        report.documents_purged,
+                    )
+            except Exception:
+                # 维护任务是尽力而为：单轮失败只记录，绝不能让 worker 进程退出
+                logger.exception("maintenance pass failed; will retry next cycle")
             # DB 兜底：原子抢占一批到期任务（FOR UPDATE SKIP LOCKED），
             # 并发处理以压榨外部 API 的等待时间。
             job_ids = await claim_due_jobs(session_factory, limit=concurrency)

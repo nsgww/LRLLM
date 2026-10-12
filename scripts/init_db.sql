@@ -55,7 +55,7 @@ CREATE TABLE documents (
     source                 TEXT,
     product                TEXT,
     version                TEXT,
-    content                TEXT NOT NULL,
+    content                BYTEA NOT NULL,
     content_hash           TEXT NOT NULL,
     parser_version         TEXT,
     chunker_version        TEXT,
@@ -108,7 +108,7 @@ CREATE TABLE chunks (
     line_start             INT NOT NULL,
     line_end               INT NOT NULL,
     chunk_type             chunk_type NOT NULL DEFAULT 'TEXT',
-    parent_chunk_id        UUID REFERENCES chunks(id),  -- 父块；父块只存 PG，不参与检索
+    parent_chunk_id        UUID REFERENCES chunks(id) ON DELETE CASCADE,  -- 父块；父块只存 PG，不参与检索
     is_parent              BOOLEAN NOT NULL DEFAULT false,
     chunk_index            INT NOT NULL,
     token_count            INT NOT NULL,

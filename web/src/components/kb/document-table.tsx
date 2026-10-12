@@ -67,6 +67,7 @@ export function DocumentTable({
   onReindex,
 }: DocumentTableProps) {
   const [confirmId, setConfirmId] = React.useState<string | null>(null);
+  const [actionError, setActionError] = React.useState<string | null>(null);
 
   if (!loading && documents.length === 0) {
     return (
@@ -78,6 +79,11 @@ export function DocumentTable({
 
   return (
     <div className="space-y-3">
+      {actionError && (
+        <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {actionError}
+        </p>
+      )}
       <div className="rounded-lg border">
         <Table>
           <TableHeader>
@@ -112,7 +118,14 @@ export function DocumentTable({
                             variant="ghost"
                             size="icon"
                             disabled={busy}
-                            onClick={() => void onReindex(doc.id)}
+                            onClick={() => {
+                              setActionError(null);
+                              onReindex(doc.id).catch((err) =>
+                                setActionError(
+                                  err instanceof Error ? err.message : "重建索引失败",
+                                ),
+                              );
+                            }}
                             aria-label="重建索引"
                           >
                             {busy ? (
@@ -154,8 +167,16 @@ export function DocumentTable({
                             <Button
                               variant="destructive"
                               onClick={async () => {
-                                await onDelete(doc.id);
-                                setConfirmId(null);
+                                setActionError(null);
+                                try {
+                                  await onDelete(doc.id);
+                                  setConfirmId(null);
+                                } catch (err) {
+                                  // 删除失败：保持对话框打开并展示原因
+                                  setActionError(
+                                    err instanceof Error ? err.message : "删除失败",
+                                  );
+                                }
                               }}
                             >
                               删除

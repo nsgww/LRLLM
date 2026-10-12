@@ -1,6 +1,6 @@
 """Knowledge base endpoints (05-api-spec section 5)."""
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 
 from app.api.deps import require_api_key
 from app.api.pagination import decode_cursor, next_cursor
@@ -25,7 +25,11 @@ async def create_kb(body: KnowledgeBaseCreate, request: Request) -> KnowledgeBas
 
 
 @router.get("/knowledge-bases", response_model=Page[KnowledgeBaseOut])
-async def list_kbs(request: Request, limit: int = 50, cursor: str | None = None) -> Page[KnowledgeBaseOut]:
+async def list_kbs(
+    request: Request,
+    limit: int = Query(50, ge=1, le=200),
+    cursor: str | None = None,
+) -> Page[KnowledgeBaseOut]:
     rows, has_more = await request.app.state.kb_service.list(
         limit, decode_cursor(cursor) if cursor else None
     )

@@ -39,6 +39,28 @@ def test_public_hosts_are_allowed(host):
     assert _is_private_host(host) is False
 
 
+@pytest.mark.parametrize(
+    "host",
+    [
+        "2130706433",       # decimal == 127.0.0.1
+        "0x7f000001",       # hex == 127.0.0.1
+        "0177.0.0.1",       # octal == 127.0.0.1
+        "0",                # == 0.0.0.0
+        "::1",              # IPv6 loopback
+        "fc00::1",          # IPv6 ULA
+        "fe80::1",          # IPv6 link-local
+        "::ffff:127.0.0.1", # IPv4-mapped IPv6
+        "localhost.",       # trailing FQDN dot
+    ],
+)
+def test_ip_literal_bypasses_are_detected(host):
+    assert _is_private_host(host) is True
+
+
+def test_public_ipv6_is_allowed():
+    assert _is_private_host("2606:4700:4700::1111") is False
+
+
 def test_base_url_rejects_non_http_scheme():
     with pytest.raises(ValueError, match="http/https"):
         Settings(_env_file=None, llm_base_url="file:///etc/passwd")

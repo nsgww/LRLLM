@@ -85,7 +85,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   React.useEffect(() => {
     setConversationMap(loadConversations());
-    void refreshKbs();
+    // 后端不可用时不能变成未处理的 Promise rejection（侧栏会静默空白）
+    void refreshKbs().catch((err) => {
+      console.error("failed to load knowledge bases", err);
+    });
   }, [refreshKbs]);
 
   React.useEffect(() => {

@@ -33,20 +33,20 @@ HTML_SAMPLE = """<!DOCTYPE html>
 
 
 def test_routing_by_hint_suffix():
-    assert isinstance(parser_for("anything", hint="doc.md"), MarkdownParser)
-    assert isinstance(parser_for("anything", hint="doc.html"), HtmlParser)
-    assert isinstance(parser_for("anything", hint="doc.pdf"), PdfParser)
+    assert isinstance(parser_for(b"anything", hint="doc.md"), MarkdownParser)
+    assert isinstance(parser_for(b"anything", hint="doc.html"), HtmlParser)
+    assert isinstance(parser_for(b"anything", hint="doc.pdf"), PdfParser)
 
 
 def test_routing_by_content_sniffing():
-    assert isinstance(parser_for("%PDF-1.7 binary..."), PdfParser)
-    assert isinstance(parser_for("<!DOCTYPE html><html>...</html>"), HtmlParser)
-    assert isinstance(parser_for("# plain markdown\n\ntext"), MarkdownParser)
+    assert isinstance(parser_for(b"%PDF-1.7 binary..."), PdfParser)
+    assert isinstance(parser_for(b"<!DOCTYPE html><html>...</html>"), HtmlParser)
+    assert isinstance(parser_for(b"# plain markdown\n\ntext"), MarkdownParser)
 
 
 def test_routing_hint_wins_over_content():
     # 内容与扩展名不一致时以显式提示为准（上传文件名即文档来源）
-    assert isinstance(parser_for("<html>x</html>", hint="doc.md"), MarkdownParser)
+    assert isinstance(parser_for(b"<html>x</html>", hint="doc.md"), MarkdownParser)
 
 
 async def test_html_blocks_and_heading_path():

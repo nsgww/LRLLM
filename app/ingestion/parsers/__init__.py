@@ -22,18 +22,23 @@ _HINT_SUFFIXES = {
 }
 
 
-def parser_for(content: str, hint: str | None = None) -> Parser:
-    """按文件名提示 + 内容嗅探选择解析器。"""
+def parser_for(content: bytes, hint: str | None = None) -> Parser:
+    """按文件名提示 + 内容嗅探选择解析器。
+
+    ``content`` 为原始字节（BYTEA）。嗅探只对 ASCII 前缀做判断，故以
+    latin-1 容错解码出前 2KB 再匹配魔数/标签，二进制字节不会让嗅探崩溃。
+    """
     if hint:
         lowered = hint.lower()
         for suffix, kind in _HINT_SUFFIXES.items():
             if lowered.endswith(suffix):
                 return _by_kind(kind)
 
-    stripped = content.lstrip()
+    prefix = content[:2048].decode("latin-1", errors="ignore")
+    stripped = prefix.lstrip()
     if stripped.startswith("%PDF"):
         return PdfParser()
-    sample = content[:2000].lower()
+    sample = prefix.lower()
     if "<html" in sample or "<!doctype html" in sample:
         return HtmlParser()
     return MarkdownParser()

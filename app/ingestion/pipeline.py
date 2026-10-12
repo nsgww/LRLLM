@@ -178,10 +178,8 @@ class IngestionPipeline:
                 # PARSE
                 stage = "PARSE"
                 ast = await parser.parse(
-                    # PDF 以 latin-1 保真还原原始字节；文本格式按 UTF-8
-                    document.content.encode("latin-1")
-                    if parser.name == "pdf"
-                    else document.content.encode("utf-8"),
+                    # content 以原始字节（BYTEA）存储，直接交给解析器处理
+                    document.content,
                     metadata={
                         "title": document.title,
                         "doc_class": document.doc_class,

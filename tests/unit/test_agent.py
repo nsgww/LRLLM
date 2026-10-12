@@ -108,10 +108,20 @@ class _TestableRunner(AgentRunner):
 
     真实路径的 ``_wrap_tools`` 依赖 langchain；本测试不安装它，因此
     覆盖这一层。决策循环、收敛控制、作用域隔离等被测逻辑与框架无关。
+    同时覆写持久化相关方法为 no-op：这些单测聚焦循环，不连数据库。
     """
 
     def _wrap_tools(self, specs):
         return [spec.name for spec in specs]
+
+    async def _conversation_setup(self, knowledge_base_id, query, conversation_id):
+        return conversation_id or _KB_ID, ""
+
+    async def _persist(self, conversation_id, answer_id, final_answer):
+        return None
+
+    async def _save_trace(self, trace):
+        return None
 
 
 def _settings(**overrides) -> Settings:

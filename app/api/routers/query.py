@@ -60,12 +60,19 @@ async def query(
                 },
             )
             return
+        # The in-flight __anext__ must survive heartbeat timeouts. Wrapping it in
+        # a task and awaiting via asyncio.shield means a wait_for timeout cancels
+        # only the shield wrapper, never the underlying step (a cancelled
+        # __anext__ closes the async generator and silently truncates the stream).
+        iterator = service.ask(kb_id, body.query, body.conversation_id).__aiter__()
+        pending: asyncio.Task | None = None
         try:
-            iterator = service.ask(kb_id, body.query, body.conversation_id).__aiter__()
             while True:
+                if pending is None:
+                    pending = asyncio.ensure_future(iterator.__anext__())
                 try:
                     event = await asyncio.wait_for(
-                        iterator.__anext__(), timeout=_HEARTBEAT_SECONDS
+                        asyncio.shield(pending), timeout=_HEARTBEAT_SECONDS
                     )
                 except TimeoutError:
                     yield ": keep-alive\n\n"  # SSE 注释帧，客户端忽略
@@ -78,8 +85,25 @@ async def query(
                         {"error": {"code": exc.code, "stage": exc.stage, "message": exc.message}},
                     )
                     break
+                except Exception:
+                    # 兜底：任何未分类异常都要以一个 error 帧收尾，
+                    # 绝不在没有 done/error 事件的情况下静默断流。
+                    yield _sse(
+                        "error",
+                        {
+                            "error": {
+                                "code": "INTERNAL_ERROR",
+                                "stage": None,
+                                "message": "internal error while streaming",
+                            }
+                        },
+                    )
+                    break
+                pending = None
                 yield _sse(event.event, event.data)
         finally:
+            if pending is not None and not pending.done():
+                pending.cancel()
             semaphore.release()
 
     return StreamingResponse(

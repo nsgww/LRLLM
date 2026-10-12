@@ -39,9 +39,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.agent.adapters import safe_parse_arguments
 from app.core.config import Settings
 from app.core.errors import AppError, QueryStage
+from app.core.ids import assert_same_kb
 from app.llm.factory import LangChainUnavailableError, build_chat_model
 from app.retrieval.hybrid import HybridRetriever
 from app.retrieval.rerank import RerankService
+from app.storage.postgres.repositories import ConversationRepository
 from app.tools.builtin import build_tools
 from app.tools.contracts import ToolCallRecord, ToolSpec
 from app.tracing.query_trace import QueryTraceBuilder
@@ -109,7 +111,7 @@ class AgentRunner:
         self,
         knowledge_base_id: str,
         query: str,
-        conversation_context: str = "",
+        conversation_id: str | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """执行一次 Agent 对话，逐个产出事件。
 
@@ -136,10 +138,16 @@ class AgentRunner:
                     message="agent capability is disabled (RAG_AGENT_ENABLED=false)",
                     http_status=503,
                 )
+            conversation_id, conversation_context = await self._conversation_setup(
+                knowledge_base_id, query, conversation_id
+            )
+            trace.conversation_id = conversation_id
             async for event in self._loop(
                 knowledge_base_id, query, conversation_context, trace, answer_id, started
             ):
                 yield event
+            # 落库：把最终答案写回会话，与 /v1/query 的多轮行为一致。
+            await self._persist(conversation_id, answer_id, trace.final_answer or "")
         except (LangChainUnavailableError, AppError) as exc:
             trace.error_stage = exc.stage
             trace.finish_stages()
@@ -238,10 +246,16 @@ class AgentRunner:
         trace.agent_steps = [r.__dict__ for r in records]
 
         trace.start_stage(QueryStage.LLM_GENERATION.value)
+        streamed: list[str] = []
         async for chunk in self._stream_final(messages, final_text):
+            streamed.append(chunk)
             yield AgentEvent("delta", {"text": chunk})
 
-        trace.final_answer = final_text
+        # Prefer the actually streamed text. When the model stopped with no
+        # content, final_text is empty and the real answer came from
+        # _stream_final's forced generation; persisting final_text alone would
+        # drop it from the trace and the persisted conversation message.
+        trace.final_answer = "".join(streamed) or final_text
         trace.finish_stages()
         trace.latency_ms = int((time.perf_counter() - started) * 1000)
         yield AgentEvent(
@@ -320,6 +334,46 @@ class AgentRunner:
     def _render_system(self, specs: list[ToolSpec]) -> str:
         listing = "\n".join(f"- {s.name}: {s.description}" for s in specs)
         return _SYSTEM_PROMPT.format(tool_list=listing)
+
+    async def _conversation_setup(
+        self, knowledge_base_id: str, query: str, conversation_id: str | None
+    ) -> tuple[str, str]:
+        """Create or resume a conversation, returning (id, context_text).
+
+        Mirrors QueryService: a provided conversation_id must belong to this KB
+        (cross-KB history injection guard); the USER turn is persisted here.
+        """
+        async with self._session_factory() as session:
+            conversations = ConversationRepository(session)
+            if conversation_id is None:
+                conversation = await conversations.create(knowledge_base_id)
+                conversation_id = str(conversation.id)
+                history = []
+            else:
+                existing = await conversations.get(conversation_id)
+                if existing is None:
+                    raise AppError(
+                        code="CONVERSATION_NOT_FOUND",
+                        message=f"conversation {conversation_id} not found",
+                        http_status=404,
+                    )
+                assert_same_kb(existing, knowledge_base_id)
+                history = await conversations.recent_messages(conversation_id)
+            await conversations.add_message(conversation_id, "USER", query)
+            await session.commit()
+
+        lines = []
+        for row in history:
+            speaker = "用户" if row.role == "USER" else "助手"
+            lines.append(f"{speaker}: {row.content}")
+        return conversation_id, "\n".join(lines) or "（无）"
+
+    async def _persist(self, conversation_id: str, answer_id: str, final_answer: str) -> None:
+        async with self._session_factory() as session:
+            await ConversationRepository(session).add_message(
+                conversation_id, "ASSISTANT", final_answer, answer_id
+            )
+            await session.commit()
 
     async def _save_trace(self, trace: QueryTraceBuilder) -> None:
         from app.storage.postgres.repositories import QueryTraceRepository

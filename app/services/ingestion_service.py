@@ -17,6 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.errors import AppError
+from app.core.ids import assert_same_kb
 from app.domain.document import Document
 from app.domain.ingestion import IngestionJob, JobStatus
 from app.services.queue import IngestionQueue
@@ -69,14 +70,13 @@ class IngestionService:
             raise AppError(code="FILE_EMPTY", message="empty file", http_status=400)
 
         content_hash = hashlib.sha256(content).hexdigest()
-        try:
-            text = content.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            # PDF 等二进制内容：latin-1 按字节保真映射为 str 存入 TEXT 列，
-            # 管线解析时按 parser.name == "pdf" 还原原始字节
-            if filename.lower().endswith(".pdf"):
-                text = content.decode("latin-1")
-            else:
+        # 文本格式必须是 UTF-8；PDF 等二进制按原始字节存入 BYTEA，
+        # 由管线在解析时按 parser 还原。避免把二进制塞进 TEXT 列
+        # （含 NUL 字节会被 PostgreSQL/asyncpg 拒绝，导致上传 500）。
+        if not filename.lower().endswith(".pdf"):
+            try:
+                content.decode("utf-8")
+            except UnicodeDecodeError as exc:
                 raise AppError(
                     code="FILE_INVALID",
                     message="text documents must be UTF-8 encoded",
@@ -109,7 +109,7 @@ class IngestionService:
                     source=metadata.get("source"),
                     product=metadata.get("product"),
                     version=metadata.get("version"),
-                    content=text,
+                    content=content,
                     content_hash=content_hash,
                 )
             )
@@ -141,7 +141,7 @@ class IngestionService:
                 status="PENDING",
             )
 
-    async def reindex(self, document_id: str) -> UploadResult:
+    async def reindex(self, document_id: str, kb_id: str | None = None) -> UploadResult:
         async with self._session_factory() as session:
             documents = DocumentRepository(session)
             document = await documents.get(document_id)
@@ -150,6 +150,17 @@ class IngestionService:
                     code="DOCUMENT_NOT_FOUND",
                     message=f"document {document_id} not found",
                     http_status=404,
+                )
+            if kb_id:
+                assert_same_kb(document, kb_id)
+            # 若已有在进行中的任务，复用它而不是重复入队（防反复 reindex 淹没 worker）
+            active = await IngestionJobRepository(session).find_active(document_id)
+            if active is not None:
+                return UploadResult(
+                    document_id=document_id,
+                    ingestion_job_id=str(active.id),
+                    content_hash=document.content_hash,
+                    status=active.status.value,
                 )
             job = await IngestionJobRepository(session).create(
                 IngestionJob(
@@ -168,7 +179,7 @@ class IngestionService:
                 status="PENDING",
             )
 
-    async def delete(self, document_id: str) -> None:
+    async def delete(self, document_id: str, kb_id: str | None = None) -> None:
         async with self._session_factory() as session:
             documents = DocumentRepository(session)
             chunks = ChunkRepository(session)
@@ -179,6 +190,8 @@ class IngestionService:
                     message=f"document {document_id} not found",
                     http_status=404,
                 )
+            if kb_id:
+                assert_same_kb(document, kb_id)
             chunk_ids = await chunks.list_ids_by_document(document_id)
             # soft delete first: retrieval exclusion is effective immediately
             await documents.soft_delete(document_id)
@@ -193,7 +206,7 @@ class IngestionService:
         async with self._session_factory() as session:
             return await DocumentRepository(session).list(kb_id, limit, cursor)
 
-    async def get_document(self, document_id: str) -> DocumentRow:
+    async def get_document(self, document_id: str, kb_id: str | None = None) -> DocumentRow:
         async with self._session_factory() as session:
             row = await DocumentRepository(session).get(document_id)
         if row is None:
@@ -202,9 +215,11 @@ class IngestionService:
                 message=f"document {document_id} not found",
                 http_status=404,
             )
+        if kb_id:
+            assert_same_kb(row, kb_id)
         return row
 
-    async def get_job(self, job_id: str) -> IngestionJobRow:
+    async def get_job(self, job_id: str, kb_id: str | None = None) -> IngestionJobRow:
         async with self._session_factory() as session:
             row = await IngestionJobRepository(session).get(job_id)
         if row is None:
@@ -213,6 +228,8 @@ class IngestionService:
                 message=f"ingestion job {job_id} not found",
                 http_status=404,
             )
+        if kb_id:
+            assert_same_kb(row, kb_id)
         return row
 
     async def list_jobs(
@@ -221,8 +238,9 @@ class IngestionService:
         status: JobStatus | None = None,
         limit: int = 50,
         cursor: tuple[datetime, str] | None = None,
+        kb_id: str | None = None,
     ) -> tuple[list[IngestionJobRow], bool]:
         async with self._session_factory() as session:
             return await IngestionJobRepository(session).list(
-                document_id, status, limit, cursor
+                document_id, status, limit, cursor, kb_id
             )

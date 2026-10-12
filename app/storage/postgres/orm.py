@@ -45,7 +45,7 @@ class DocumentRow(Base):
     source: Mapped[str | None] = mapped_column(sa.Text)
     product: Mapped[str | None] = mapped_column(sa.Text)
     version: Mapped[str | None] = mapped_column(sa.Text)
-    content: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    content: Mapped[bytes] = mapped_column(sa.LargeBinary, nullable=False)
     content_hash: Mapped[str] = mapped_column(sa.Text, nullable=False)
     parser_version: Mapped[str | None] = mapped_column(sa.Text)
     chunker_version: Mapped[str | None] = mapped_column(sa.Text)

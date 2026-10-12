@@ -6,36 +6,63 @@
 
 from __future__ import annotations
 
+import ipaddress
+from functools import lru_cache
 from urllib.parse import urlparse
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# 私网 / 保留网段前缀：出站 base_url 不得指向这些地址（防 SSRF 与云元数据探测）
-_BLOCKED_HOST_PREFIXES = (
-    "169.254.",  # link-local / 云元数据 169.254.169.254
-    "127.",      # loopback
-    "0.",
-    "10.",
-    "192.168.",
-)
+# 非 IP 的主机名黑名单：loopback 与云元数据端点（IP 字面量由 ipaddress 规范化判断）
+_BLOCKED_HOSTS = frozenset({"localhost", "metadata.google.internal", "metadata", "instance-data"})
 
-# loopback 与私网段的精确匹配项
-_BLOCKED_HOSTS = frozenset({"localhost", "::1", "[::1]", "0.0.0.0", "metadata.google.internal"})
+
+def _parse_ip_literal(host: str) -> "ipaddress.IPv4Address | ipaddress.IPv6Address | None":
+    """Parse an IP literal, tolerating the decimal/hex/octal forms that a naive
+    string-prefix check would miss (e.g. ``2130706433``, ``0x7f000001``,
+    ``0177.0.0.1``). Returns None for ordinary hostnames."""
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    if host.isdigit():  # decimal integer IPv4
+        try:
+            return ipaddress.ip_address(int(host))
+        except (ValueError, OverflowError):
+            return None
+    low = host.lower()
+    if low.startswith("0x"):  # hexadecimal IPv4
+        try:
+            return ipaddress.ip_address(int(low, 16))
+        except (ValueError, OverflowError):
+            return None
+    parts = host.split(".")  # octal dotted-quad, e.g. 0177.0.0.1
+    if len(parts) == 4 and all(p.isdigit() for p in parts):
+        try:
+            return ipaddress.ip_address(".".join(str(int(p, 8)) for p in parts))
+        except ValueError:
+            return None
+    return None
 
 
 def _is_private_host(host: str) -> bool:
-    h = host.strip().lower()
+    h = host.strip().lower().rstrip(".")  # tolerate a trailing FQDN dot
     if h in _BLOCKED_HOSTS:
         return True
-    if any(h.startswith(p) for p in _BLOCKED_HOST_PREFIXES):
-        return True
-    # 172.16.0.0/12
-    if h.startswith("172."):
-        parts = h.split(".")
-        if len(parts) > 1 and parts[1].isdigit() and 16 <= int(parts[1]) <= 31:
-            return True
-    return False
+    ip = _parse_ip_literal(h)
+    if ip is None:
+        return False
+    # unwrap IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1) before the range checks
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    )
 
 
 def _validate_outbound_base_url(value: str | None) -> str | None:
@@ -190,5 +217,14 @@ class Settings(BaseSettings):
         return issues
 
 
+@lru_cache
 def get_settings() -> Settings:
+    """Process-wide cached Settings.
+
+    Repositories/routers hit this on hot paths (the auth dependency, the upload
+    size limit, the agent endpoint). Re-reading and re-validating the ``.env``
+    file on every request is pure overhead, so the parsed Settings are cached
+    for the process lifetime. Tests construct ``Settings(...)`` directly and do
+    not depend on this cache.
+    """
     return Settings()

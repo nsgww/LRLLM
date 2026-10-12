@@ -68,8 +68,9 @@ class QueryRequest(BaseModel):
 class AgentRequest(BaseModel):
     """Agent 请求体（/v1/agent）。
 
-    v0.1 的 Agent 不接续会话历史：自主决策路径的中间状态（工具调用轨迹）
-    在单次请求内闭环，跨轮次记忆尚未定义。conversation_id 预留给后续版本。
+    ``conversation_id`` 可选：传入则接续该会话历史（必须属于当前 KB），
+    否则隐式新建。Agent 的中间工具调用轨迹仍只在单次请求内闭环，
+    但最终答案会写回会话，与 /v1/query 的多轮行为一致。
     """
 
     query: str

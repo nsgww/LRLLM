@@ -31,11 +31,14 @@ export function EvidenceSheet({ answerId, disabled }: EvidenceSheetProps) {
 
   React.useEffect(() => {
     if (!open || loaded.current) return;
-    loaded.current = true;
     setLoading(true);
     setError(null);
     getEvidence(answerId)
-      .then((res) => setItems(res.evidence))
+      .then((res) => {
+        setItems(res.evidence);
+        // Only cache on success: a failed load must allow a retry next open.
+        loaded.current = true;
+      })
       .catch((err) =>
         setError(err instanceof Error ? err.message : "加载证据失败"),
       )

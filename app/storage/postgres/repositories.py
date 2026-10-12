@@ -495,6 +495,23 @@ class IngestionJobRepository:
         stmt = sa.select(IngestionJobRow).where(IngestionJobRow.id == parse_uuid(job_id))
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
+    async def find_active(self, document_id: str) -> IngestionJobRow | None:
+        """Latest still-active (PENDING/RUNNING) job for a document, if any.
+
+        Used by reindex to avoid enqueuing a duplicate job while one is already
+        in flight (which would flood the worker and re-burn embedding quota).
+        """
+        stmt = (
+            sa.select(IngestionJobRow)
+            .where(
+                IngestionJobRow.document_id == parse_uuid(document_id),
+                IngestionJobRow.status.in_([JobStatus.PENDING, JobStatus.RUNNING]),
+            )
+            .order_by(IngestionJobRow.created_at.desc())
+            .limit(1)
+        )
+        return (await self._session.execute(stmt)).scalar_one_or_none()
+
     async def update(
         self,
         job_id: str,
@@ -562,16 +579,23 @@ class IngestionJobRepository:
         )
         return list((await self._session.execute(stmt)).scalars().all())
 
-    async def claim_pending(self, limit: int = 10) -> list[IngestionJobRow]:
-        """Atomically claim due PENDING jobs for this worker.
+    async def claim_pending(self, limit: int = 10) -> list[str]:
+        """Atomically claim due PENDING jobs and mark them RUNNING.
 
-        ``FOR UPDATE SKIP LOCKED`` lets multiple worker replicas poll safely:
-        each row is handed to exactly one worker, so a job is never processed
-        twice. The claim must be committed by the caller to release the locks.
+        The ``SELECT ... FOR UPDATE SKIP LOCKED`` and the flip to RUNNING happen
+        in a single statement (committed by the caller). Flipping the status in
+        the same statement — rather than a bare SELECT — closes the window where
+        a second worker replica could re-claim the still-PENDING row before the
+        pipeline sets it RUNNING in a later transaction (which would process the
+        same job twice).
+
+        ``attempt_count`` is intentionally NOT touched here: the pipeline owns
+        attempt accounting at its PARSE transition. ``started_at`` is stamped now
+        so stale-job recovery measures from claim time.
         """
         now = datetime.now(UTC)
-        stmt = (
-            sa.select(IngestionJobRow)
+        due = (
+            sa.select(IngestionJobRow.id)
             .where(
                 IngestionJobRow.status == JobStatus.PENDING,
                 sa.or_(
@@ -582,8 +606,15 @@ class IngestionJobRepository:
             .order_by(IngestionJobRow.created_at)
             .limit(limit)
             .with_for_update(skip_locked=True)
+            .scalar_subquery()
         )
-        return list((await self._session.execute(stmt)).scalars().all())
+        stmt = (
+            sa.update(IngestionJobRow)
+            .where(IngestionJobRow.id.in_(due))
+            .values(status=JobStatus.RUNNING, started_at=sa.func.now())
+            .returning(IngestionJobRow.id)
+        )
+        return [str(r) for r in (await self._session.execute(stmt)).scalars().all()]
 
     async def list_stale_running(self, cutoff: datetime, limit: int = 50) -> list[IngestionJobRow]:
         """RUNNING jobs whose attempt started before `cutoff` (worker crashed)."""
@@ -605,12 +636,15 @@ class IngestionJobRepository:
         status: JobStatus | None = None,
         limit: int = 50,
         cursor: tuple[datetime, str] | None = None,
+        kb_id: str | None = None,
     ) -> tuple[list[IngestionJobRow], bool]:
         stmt = (
             sa.select(IngestionJobRow)
             .order_by(IngestionJobRow.created_at.desc(), IngestionJobRow.id.desc())
             .limit(limit + 1)
         )
+        if kb_id is not None:
+            stmt = stmt.where(IngestionJobRow.knowledge_base_id == parse_uuid(kb_id))
         if document_id is not None:
             stmt = stmt.where(IngestionJobRow.document_id == parse_uuid(document_id))
         if status is not None:

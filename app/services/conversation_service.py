@@ -9,6 +9,7 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.errors import AppError
+from app.core.ids import assert_same_kb
 from app.storage.postgres.orm import ConversationMessageRow, ConversationRow
 from app.storage.postgres.repositories import ConversationRepository
 
@@ -17,7 +18,7 @@ class ConversationService:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
 
-    async def get(self, conversation_id: str) -> ConversationRow:
+    async def get(self, conversation_id: str, kb_id: str | None = None) -> ConversationRow:
         async with self._session_factory() as session:
             row = await ConversationRepository(session).get(conversation_id)
         if row is None:
@@ -26,6 +27,8 @@ class ConversationService:
                 message=f"conversation {conversation_id} not found",
                 http_status=404,
             )
+        if kb_id:
+            assert_same_kb(row, kb_id)
         return row
 
     async def create(self, kb_id: str) -> ConversationRow:
@@ -43,8 +46,9 @@ class ConversationService:
         conversation_id: str,
         limit: int = 50,
         cursor: tuple[datetime, str] | None = None,
+        kb_id: str | None = None,
     ) -> tuple[list[ConversationMessageRow], bool]:
-        await self.get(conversation_id)
+        await self.get(conversation_id, kb_id)
         async with self._session_factory() as session:
             return await ConversationRepository(session).list_messages(
                 conversation_id, limit, cursor

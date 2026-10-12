@@ -1,6 +1,6 @@
 """Document endpoints (05-api-spec section 6)."""
 
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 
 from app.api.deps import require_api_key, require_kb_id
 from app.api.pagination import decode_cursor, next_cursor
@@ -94,7 +94,7 @@ async def upload_document(
 @router.get("/documents", response_model=Page[DocumentOut])
 async def list_documents(
     request: Request,
-    limit: int = 50,
+    limit: int = Query(50, ge=1, le=200),
     cursor: str | None = None,
     kb_id: str = Depends(require_kb_id),
 ) -> Page[DocumentOut]:
@@ -109,15 +109,31 @@ async def list_documents(
 
 
 @router.get("/documents/{document_id}", response_model=DocumentOut)
-async def get_document(document_id: str, request: Request) -> DocumentOut:
-    return _doc_out(await request.app.state.ingestion_service.get_document(document_id))
+async def get_document(
+    document_id: str,
+    request: Request,
+    kb_id: str = Depends(require_kb_id),
+) -> DocumentOut:
+    return _doc_out(
+        await request.app.state.ingestion_service.get_document(document_id, kb_id)
+    )
 
 
 @router.delete("/documents/{document_id}", status_code=204)
-async def delete_document(document_id: str, request: Request) -> None:
-    await request.app.state.ingestion_service.delete(document_id)
+async def delete_document(
+    document_id: str,
+    request: Request,
+    kb_id: str = Depends(require_kb_id),
+) -> None:
+    await request.app.state.ingestion_service.delete(document_id, kb_id)
 
 
 @router.post("/documents/{document_id}/reindex", response_model=UploadOut, status_code=202)
-async def reindex_document(document_id: str, request: Request) -> UploadOut:
-    return _upload_out(await request.app.state.ingestion_service.reindex(document_id))
+async def reindex_document(
+    document_id: str,
+    request: Request,
+    kb_id: str = Depends(require_kb_id),
+) -> UploadOut:
+    return _upload_out(
+        await request.app.state.ingestion_service.reindex(document_id, kb_id)
+    )

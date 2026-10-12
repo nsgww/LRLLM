@@ -1,8 +1,8 @@
 """Ingestion job endpoints (05-api-spec section 7)."""
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 
-from app.api.deps import require_api_key
+from app.api.deps import require_api_key, require_kb_id
 from app.api.pagination import decode_cursor, next_cursor
 from app.api.schemas import IngestionJobOut, Page
 from app.domain.ingestion import JobStatus
@@ -28,8 +28,12 @@ def _job_out(row) -> IngestionJobOut:
 
 
 @router.get("/ingestion-jobs/{job_id}", response_model=IngestionJobOut)
-async def get_job(job_id: str, request: Request) -> IngestionJobOut:
-    return _job_out(await request.app.state.ingestion_service.get_job(job_id))
+async def get_job(
+    job_id: str,
+    request: Request,
+    kb_id: str = Depends(require_kb_id),
+) -> IngestionJobOut:
+    return _job_out(await request.app.state.ingestion_service.get_job(job_id, kb_id))
 
 
 @router.get("/ingestion-jobs", response_model=Page[IngestionJobOut])
@@ -37,11 +41,12 @@ async def list_jobs(
     request: Request,
     document_id: str | None = None,
     status: JobStatus | None = None,
-    limit: int = 50,
+    limit: int = Query(50, ge=1, le=200),
     cursor: str | None = None,
+    kb_id: str = Depends(require_kb_id),
 ) -> Page[IngestionJobOut]:
     rows, has_more = await request.app.state.ingestion_service.list_jobs(
-        document_id, status, limit, decode_cursor(cursor) if cursor else None
+        document_id, status, limit, decode_cursor(cursor) if cursor else None, kb_id
     )
     return Page[IngestionJobOut](
         items=[_job_out(r) for r in rows],

@@ -9,12 +9,10 @@ import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 import sqlalchemy as sa
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, RedirectResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 
 from app.agent.runner import AgentRunner
 from app.api.routers import (
@@ -259,15 +257,6 @@ def create_app() -> FastAPI:
         if not ok:
             return JSONResponse(status_code=503, content=payload)
         return payload
-
-    # Web 前端：零依赖静态页面，由 FastAPI 直接托管（同源访问 /v1，无跨域问题）
-    web_dir = Path(__file__).resolve().parent.parent / "web"
-    if web_dir.is_dir():
-        app.mount("/web", StaticFiles(directory=web_dir, html=True), name="web")
-
-        @app.get("/", include_in_schema=False)
-        async def index() -> RedirectResponse:
-            return RedirectResponse(url="/web/")
 
     return app
 
