@@ -1,8 +1,11 @@
 # LRLLM — Private Knowledge RAG (v0.1)
 
 私有知识库 RAG 问答助手：文档入库（Markdown / HTML / PDF）→ 父子切块 →
-混合检索（向量 + 关键词，RRF 融合）→ 父块上下文扩展 → 证据检查 → SSE 流式回答。
-单一共享知识空间，通过 `X-Knowledge-Base-ID` 头约定作用域，v0.1 不做真实鉴权。
+混合检索（向量 + 关键词，RRF 融合）→ 父块上下文扩展 → 证据检查 → SSE 流式回答；
+另提供 `/v1/agent` 自主决策路径（ReAct 工具调用循环）。
+
+单一共享知识空间，通过 `X-Knowledge-Base-ID` 头约定作用域，v0.1 不做真实鉴权；
+但已防护跨知识库越权（按 ID 取资源会校验其归属当前 KB，否则返回 404）。
 
 核心原则（见 `skills/skills.md`）：
 
@@ -14,8 +17,14 @@
 # 1. 启动基础设施（PostgreSQL / Qdrant / Redis）
 docker compose up -d
 
-# 2. 建库（DDL 即 docs/private-knowledge-rag/09-database-schema.md）
+# 2. 建库
+#    全新库：DDL 即 docs/private-knowledge-rag/09-database-schema.md
 psql -h localhost -U postgres -d rag -f scripts/init_db.sql
+#    已有旧库：按版本顺序执行增量迁移（各文件幂等，可重复执行）
+psql -d rag -f scripts/migrate_0.2.0.sql
+psql -d rag -f scripts/migrate_0.3.0.sql
+psql -d rag -f scripts/migrate_0.4.0.sql
+psql -d rag -f scripts/migrate_0.5.0.sql   # content->BYTEA、parent_chunk_id 级联删除
 
 # 3. 配置环境
 copy .env.example .env   # 填入 LLM / Embedding 的 key 与 model
@@ -26,7 +35,17 @@ python scripts/seed_prompts.py
 # 5. 启动 API 与 Ingestion Worker（两个进程）
 uvicorn app.main:app --reload
 python -m workers.ingestion_worker
+
+# 6. 启动前端（Next.js，独立进程）
+cd web
+npm install
+npm run dev            # 开发；生产用 npm run build && npm start
 ```
+
+> 前端不再由 FastAPI 静态托管（早期会把整个 `web/` 目录挂成静态文件，暴露源码与
+> `.env.local`）。现在前端独立部署，Next 的 `rewrites` 把浏览器请求的 `/v1/*`
+> 同源代理到 `BACKEND_URL`（默认 `http://localhost:8000`），因此浏览器始终同源访问，
+> 无需 CORS。
 
 ## 目录结构
 
@@ -36,11 +55,15 @@ LRLLM/
 ├── skills/                       # 项目级行为规范
 ├── app/                          # 应用代码（FastAPI 进程）
 ├── workers/                      # 后台进程（入库 Worker）
-├── scripts/                      # 一次性脚本（建库 / 种子数据）
+├── web/                          # 前端（Next.js 14 + React + TS + Tailwind + shadcn/ui）
+├── scripts/                      # 一次性脚本（建库 / 迁移 / 种子数据）
+├── migrations/                   # Alembic 环境（预留，版本脚本未接入，见下）
 ├── tests/                        # 单元测试 + 评测数据集
 ├── pyproject.toml                # 依赖与 pytest 配置
+├── alembic.ini                   # Alembic 配置（当前未启用 autogenerate）
 ├── docker-compose.yml            # PostgreSQL / Qdrant / Redis
-└── .env.example                  # 全部配置项样例（RAG_ 前缀）
+├── .env.example                  # 全部配置项样例（RAG_ 前缀）
+└── .env                          # 本地配置（复制自 .env.example，不入库）
 ```
 
 ## docs/private-knowledge-rag/ — 规格文档
@@ -76,7 +99,7 @@ app/
 ├── core/                    # 横切基础
 │   ├── config.py            #   全部配置（RAG_ 前缀环境变量），检索参数只能在这里调
 │   ├── errors.py            #   错误分类唯一来源：QueryStage / IngestionErrorCode / AppError
-│   ├── ids.py               #   UUID 解析（非法输入转 400，而非 500）
+│   ├── ids.py               #   UUID 解析（非法输入转 400）+ 跨 KB 归属断言 assert_same_kb
 │   ├── startup.py           #   启动一致性校验（Embedding 版本与索引一致）
 │   ├── versions.py          #   PARSER_VERSION / CHUNKER_VERSION 常量
 │   └── logging.py           #   日志初始化
@@ -90,11 +113,15 @@ app/
 │   ├── pagination.py        #   Cursor 分页编解码（05 号文档 12 节）
 │   ├── schemas.py           #   请求 / 响应模型
 │   └── routers/             #   knowledge_bases / documents / ingestion_jobs /
-│                            #   query（SSE 流式）/ answers / conversations
+│                            #   query（SSE 流式）/ agent（SSE 自主决策）/
+│                            #   answers / conversations
+├── agent/                   # Agent 自主决策路径（/v1/agent）
+│   ├── adapters.py          #   LangChain 适配（可缺失，降级时 agent 返回 503）
+│   └── runner.py            #   ReAct 决策循环：工具调用、收敛控制、会话接续、答案落库
 ├── services/                # 业务编排
 │   ├── knowledge_base_service.py
-│   ├── ingestion_service.py #   上传 / 重建索引：建 Job，不写向量
-│   ├── query_service.py     #   查询主链路编排（02 号文档全流程）
+│   ├── ingestion_service.py #   上传 / 重建索引：建 Job，不写向量；reindex 去重；KB 归属校验
+│   ├── query_service.py     #   查询主链路编排（02 号文档全流程）；会话归属校验
 │   ├── cleanup_service.py   #   软删除物理清理与孤儿向量对账（09 号文档 11 节）
 │   └── conversation_service.py
 ├── ingestion/               # 入库管线实现（04 号文档）
@@ -112,46 +139,84 @@ app/
 │   └── context/builder.py   #   Context 构建：去重、版本上限、token 预算、版本分段
 ├── llm/                     # LLM 抽象与实现
 │   ├── interface.py         #   LLM Protocol（generate + stream）
-│   ├── providers/openai.py  #   OpenAI 兼容实现（可配 base_url）
+│   ├── providers/           #   OpenAI 兼容实现（可配 base_url）
 │   ├── prompts/loader.py    #   Prompt 从库加载，TTL 缓存，运行时热修改生效
 │   ├── prompts/seed/*.md    #   6 个种子模板（理解/改写/拆分/证据/回答/通用）
 │   ├── schemas.py           #   结构化输出 schema
 │   └── parsing.py           #   JSON 提取 → 校验 → 一次重试 → 阶段错误
-├── embedding/               # Embedding 接口 + OpenAI 兼容实现
+├── embedding/               # Embedding 接口 + OpenAI 兼容实现（providers/）
 ├── reranker/                # Reranker 接口 + HTTP 实现（provider=none 时关闭）
 ├── storage/                 # 存储层（PostgreSQL 是唯一 Source of Truth）
 │   ├── base.py              #   VectorStore / KeywordStore Protocol
 │   ├── postgres/            #   引擎、ORM（与 09 号 DDL 对齐）、Repository
-│   ├── qdrant/store.py      #   向量库：Collection 管理、filter 下推、维度校验
+│   │                        #   documents.content 为 BYTEA；chunks.parent_chunk_id 级联删除
+│   ├── qdrant/store.py      #   向量库：Collection 管理、filter 下推、维度校验、wait=True
 │   └── keyword/store.py     #   关键词检索：FTS（simple）+ pg_trgm 兜底
 ├── tracing/query_trace.py   # QueryTrace 构建器，只写 query_traces 表，不对 API 暴露
 ├── evaluation/              # 07 号文档：接口契约（interfaces.py）+ 可脚本指标（scoring.py）
-└── tools/                   # 预留目录，v0.1 不实现 Tool Router
+└── tools/                   # Agent 工具层：检索类工具与契约
+    ├── contracts.py         #   工具调用契约（名称 / 参数 / 结果形态）
+    └── builtin.py           #   内置工具（知识库检索等），作用域限定当前 KB
 ```
+
+## web/ — 前端
+
+Next.js 14（App Router）+ React + TypeScript + Tailwind + shadcn/ui。
+独立进程运行，通过 `next.config.mjs` 的 `rewrites` 把 `/v1/*` 同源代理到后端
+（`BACKEND_URL`，默认 `http://localhost:8000`），浏览器无跨域问题。
+
+```text
+web/src/
+├── app/                # 路由（聊天页 / 知识库管理页）+ layout
+├── components/         # UI 组件（chat/ 聊天与证据、kb/ 知识库管理、通用 ui/）
+├── hooks/              # use-chat（SSE 流式）、use-documents
+└── lib/                # api.ts（/v1 客户端）、types.ts、store.tsx（全局状态）
+```
+
+```powershell
+cd web
+npm run dev            # 开发（默认 :3000）
+npm run build && npm start   # 生产
+npm run typecheck      # tsc --noEmit
+```
+
+> 前端禁用原始 HTML 渲染（无 `dangerouslySetInnerHTML` / `rehype-raw`），
+> Markdown 全靠 React 文本节点转义，防 XSS。密钥类环境变量只放服务端（Next 代理层），
+> 不注入客户端 bundle。
 
 ## workers/ — 后台进程
 
 - `ingestion_worker.py`：入库 Worker。上传只创建 Job，不做实际处理；Worker 优先
   BLPOP Redis 队列快速拾取（秒级响应），队列空或 Redis 不可用时回退周期扫库，
-  PostgreSQL 始终是任务的唯一事实来源。具备崩溃恢复与重试：启动及轮询时回收超时的
+  PostgreSQL 始终是任务的唯一事实来源。崩溃恢复与重试：启动及轮询时回收超时的
   `RUNNING` Job，瞬时失败按 `RAG_INGESTION_MAX_ATTEMPTS` 退避重试；同时周期执行
-  软删除数据的物理清理与孤儿向量对账。v0.1 假定单实例。
+  软删除数据的物理清理与孤儿向量对账。
+- 多副本安全：`claim_pending` 以单条 `UPDATE ... WHERE id IN (SELECT ... FOR UPDATE
+  SKIP LOCKED) RETURNING id` 原子抢占并置 `RUNNING`，同一 Job 不会被两个副本同时处理。
+- 启动前与 API 进程一致地执行出站地址校验（`outbound_host_issues`），拒绝私网 /
+  云元数据地址，防 SSRF 与 Embedding 密钥外泄。
+- 维护/对账任务尽力而为：单轮失败只记录日志，不会使 Worker 进程退出。
 
 ## scripts/ — 一次性脚本
 
-- `init_db.sql`：建库脚本，与 09 号文档 DDL 一致，`psql -f` 直接执行
-- `migrate_0.2.0.sql`：0.2.0 增量迁移（父子分块字段、任务重试字段）。仅旧库需要，
-  幂等可重复执行：`psql -d <库名> -f scripts/migrate_0.2.0.sql`
+- `init_db.sql`：全新建库脚本，与 09 号文档 DDL 一致，`psql -f` 直接执行
+- `migrate_0.2.0.sql` / `migrate_0.3.0.sql` / `migrate_0.4.0.sql`：旧库增量迁移，
+  幂等可重复执行：`psql -d <库名> -f scripts/<文件>`
+- `migrate_0.5.0.sql`：`documents.content` → BYTEA、`chunks.parent_chunk_id` → 级联删除
 - `seed_prompts.py`：把 `app/llm/prompts/seed/` 下的 6 个模板灌入 `prompt_templates` 表
+
+> Schema 的权威事实源是 `scripts/*.sql`。`migrations/`（Alembic）目前只有 `env.py`、
+> 未接入版本脚本，暂不参与建库；需要版本化迁移时再补齐 `versions/`。
 
 ## tests/ — 测试与评测
 
 ```text
 tests/
-├── unit/                  # 35 个单元测试（pytest，不依赖外部服务）
-│                          #   解析 / 切块 / 元数据 / RRF / Context / 结构化输出解析
+├── unit/                  # 19 个测试文件（pytest，不依赖外部服务，约 140 用例）
+│                          #   解析 / 切块 / 元数据 / RRF / Context / 结构化输出解析 /
+│                          #   边界 / 安全（SSRF、越权）/ 分页 / Agent 循环 / Trace
 └── eval/                  # 评测资产（07 号文档，非 pytest，人工评估流程）
-    ├── datasets/*.jsonl   #   6 类评测 Case：检索 / 回答 / 版本 / 多轮 / 拆分 / grounding
+    ├── datasets/*.jsonl   #   6 类评测 Case（共 23 条）：检索 / 回答 / 版本 / 多轮 / 拆分 / grounding
     ├── fixtures/*.md      #   Case 引用的样例文档（评测前先入库）
     └── README.md          #   人工评估流程与回归触发点
 ```
@@ -162,21 +227,29 @@ tests/
 |---|---|
 | `pyproject.toml` | 依赖声明、pytest 配置（`asyncio_mode = "auto"`） |
 | `docker-compose.yml` | 本地基础设施：PostgreSQL 16 / Qdrant / Redis 7 |
+| `alembic.ini` | Alembic 配置（当前未启用，schema 以 `scripts/*.sql` 为准） |
 | `.env.example` | 全部配置项样例，复制为 `.env` 后填真实值 |
 
 ## 配置
 
 全部环境变量以 `RAG_` 为前缀，定义见 `app/core/config.py`。检索参数
 （top_k / rrf_k / per_version_cap 等）只能通过配置调整，代码内无硬编码。
+`get_settings()` 进程内缓存，避免每请求重复读取 `.env`。
 
 ## API 摘要
 
-- `POST /v1/query` — 提问，SSE 流式返回（meta → delta → evidence_status → done）
+- `POST /v1/query` — 提问，SSE 流式返回（meta → delta → evidence_status → done）；
+  支持 `conversation_id` 接续多轮（会话须属于当前 KB）
+- `POST /v1/agent` — 自主决策提问，SSE 流式返回（meta → tool_call* → delta* → done）；
+  同样支持 `conversation_id`，最终答案写回会话
 - `POST /v1/knowledge-bases` / `POST /v1/documents` — 建库与上传文档
+- `GET /v1/documents/{id}` / `DELETE /v1/documents/{id}` / `POST /v1/documents/{id}/reindex` —
+  均按当前 KB 校验归属；reindex 已有在进行中的任务时复用，不重复入队
 - `GET /v1/ingestion-jobs/{id}` — 入库进度与分阶段错误
-- `GET /v1/answers/{answer_id}/evidence` — 回答的证据引用
+- `GET /v1/answers/{answer_id}/evidence` — 回答的证据引用（须属于当前 KB）
 - 列表接口（knowledge-bases / documents / ingestion-jobs / conversations messages）统一
-  Cursor 分页，返回 `{ items, next_cursor, has_more }`；`ingestion-jobs` 支持 `?status=`
+  Cursor 分页，返回 `{ items, next_cursor, has_more }`；`ingestion-jobs` 支持 `?status=`；
+  列表 `limit` 上限 200
 - Retrieval Trace 只进 `query_traces` 表，公开 API 不暴露
 
 完整契约见 `docs/private-knowledge-rag/05-api-spec.md`。
