@@ -50,6 +50,10 @@ class MarkdownParser:
             raise IngestionError(
                 IngestionErrorCode.FILE_INVALID, f"not valid utf-8: {exc}", "PARSE"
             ) from exc
+        # A leading UTF-8 BOM would otherwise make the first line "\ufeff---",
+        # which never equals "---", silently disabling front-matter detection.
+        if text.startswith("\ufeff"):
+            text = text[1:]
         if not text.strip():
             raise IngestionError(IngestionErrorCode.FILE_EMPTY, "empty document", "PARSE")
 

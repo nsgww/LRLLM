@@ -42,6 +42,16 @@ def _parse_ip_literal(host: str) -> "ipaddress.IPv4Address | ipaddress.IPv6Addre
             return ipaddress.ip_address(".".join(str(int(p, 8)) for p in parts))
         except ValueError:
             return None
+    # inet_aton short forms: "127.1" == 127.0.0.1, "10.1" == 10.0.0.1,
+    # "192.168.1" == 192.168.0.1 (trailing octet fills the last position).
+    if 2 <= len(parts) <= 3 and all(p.isdigit() for p in parts):
+        nums = [int(p) for p in parts]
+        if all(0 <= x <= 255 for x in nums):
+            octets = nums[:-1] + [0] * (3 - (len(nums) - 1)) + [nums[-1]]
+            try:
+                return ipaddress.ip_address(".".join(map(str, octets)))
+            except ValueError:
+                return None
     return None
 
 
