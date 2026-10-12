@@ -7,7 +7,7 @@
 单一共享知识空间，通过 `X-Knowledge-Base-ID` 头约定作用域，v0.1 不做真实鉴权；
 但已防护跨知识库越权（按 ID 取资源会校验其归属当前 KB，否则返回 404）。
 
-核心原则（见 `skills/skills.md`）：
+核心原则（见 `docs/private-knowledge-rag/00-skill.md`）：
 
 > 先理解问题，再决定怎么检索；先找到证据，再决定能不能回答；先组织 Context，再让 LLM 生成。
 
@@ -51,8 +51,7 @@ npm run dev            # 开发；生产用 npm run build && npm start
 
 ```text
 LRLLM/
-├── docs/private-knowledge-rag/   # 规格文档（设计的唯一依据，见下文）
-├── skills/                       # 项目级行为规范
+├── docs/private-knowledge-rag/   # 规格文档（设计的唯一依据，见下文；00 为上位 Skill）
 ├── app/                          # 应用代码（FastAPI 进程）
 ├── workers/                      # 后台进程（入库 Worker）
 ├── web/                          # 前端（Next.js 14 + React + TS + Tailwind + shadcn/ui）
@@ -72,6 +71,7 @@ LRLLM/
 
 | 文件 | 内容 |
 |---|---|
+| `00-skill.md` | 上位 Skill：目标、系统边界、不可妥协原则（总纲） |
 | `01-architecture.md` | 整体架构、组件职责、数据流 |
 | `02-query-rag-spec.md` | 查询链路：理解 → 改写 → 拆分 → 检索 → 证据 → 生成，及 Query Trace 字段 |
 | `03-technology-selection.md` | 技术选型与理由（FastAPI / PostgreSQL / Qdrant 等） |
@@ -82,11 +82,6 @@ LRLLM/
 | `08-prompt-spec.md` | Prompt 管理：存库、版本化、热修改、结构化输出与重试 |
 | `09-database-schema.md` | 建库契约，DDL 可直接执行（即 `scripts/init_db.sql`） |
 | `10-project-structure.md` | 项目结构与代码组织约定 |
-
-## skills/ — 行为规范
-
-- `skills.md`：项目级 Skill 文件，定义目标与不可妥协原则（如"LLM 永远不是产品事实的来源"），
-  是本仓库所有设计与代码的上位约束。
 
 ## app/ — 应用代码
 
@@ -100,6 +95,7 @@ app/
 │   ├── config.py            #   全部配置（RAG_ 前缀环境变量），检索参数只能在这里调
 │   ├── errors.py            #   错误分类唯一来源：QueryStage / IngestionErrorCode / AppError
 │   ├── ids.py               #   UUID 解析（非法输入转 400）+ 跨 KB 归属断言 assert_same_kb
+│   ├── retry.py             #   Provider 瞬时失败重试（退避）
 │   ├── startup.py           #   启动一致性校验（Embedding 版本与索引一致）
 │   ├── versions.py          #   PARSER_VERSION / CHUNKER_VERSION 常量
 │   └── logging.py           #   日志初始化
@@ -123,7 +119,8 @@ app/
 │   ├── ingestion_service.py #   上传 / 重建索引：建 Job，不写向量；reindex 去重；KB 归属校验
 │   ├── query_service.py     #   查询主链路编排（02 号文档全流程）；会话归属校验
 │   ├── cleanup_service.py   #   软删除物理清理与孤儿向量对账（09 号文档 11 节）
-│   └── conversation_service.py
+│   ├── conversation_service.py
+│   └── queue.py             #   Redis 任务队列客户端（Worker 快速通道）
 ├── ingestion/               # 入库管线实现（04 号文档）
 │   ├── parsers/             #   Markdown / HTML / PDF → 统一 AST，按内容嗅探路由（04 节 23）
 │   ├── chunkers/            #   语义切块（代码块不拆、表格保留原文）+ 父子结构（04 节 17.1）
@@ -148,8 +145,9 @@ app/
 ├── reranker/                # Reranker 接口 + HTTP 实现（provider=none 时关闭）
 ├── storage/                 # 存储层（PostgreSQL 是唯一 Source of Truth）
 │   ├── base.py              #   VectorStore / KeywordStore Protocol
-│   ├── postgres/            #   引擎、ORM（与 09 号 DDL 对齐）、Repository
-│   │                        #   documents.content 为 BYTEA；chunks.parent_chunk_id 级联删除
+│   ├── postgres/            #   引擎、ORM、repositories/（按聚合拆包）
+│   │   └── repositories/    #     KB / Document / Section / Chunk / Job /
+│   │                        #     Conversation / Trace / Prompt（各一模块）
 │   ├── qdrant/store.py      #   向量库：Collection 管理、filter 下推、维度校验、wait=True
 │   └── keyword/store.py     #   关键词检索：FTS（simple）+ pg_trgm 兜底
 ├── tracing/query_trace.py   # QueryTrace 构建器，只写 query_traces 表，不对 API 暴露
@@ -212,7 +210,7 @@ npm run typecheck      # tsc --noEmit
 
 ```text
 tests/
-├── unit/                  # 19 个测试文件（pytest，不依赖外部服务，约 140 用例）
+├── unit/                  # 19 个测试文件（pytest，不依赖外部服务，约 170 用例）
 │                          #   解析 / 切块 / 元数据 / RRF / Context / 结构化输出解析 /
 │                          #   边界 / 安全（SSRF、越权）/ 分页 / Agent 循环 / Trace
 └── eval/                  # 评测资产（07 号文档，非 pytest，人工评估流程）

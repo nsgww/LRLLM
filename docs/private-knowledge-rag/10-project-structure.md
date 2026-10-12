@@ -24,6 +24,9 @@ repo/
 │   ├── core/
 │   │   ├── config.py              # Settings / 环境变量
 │   │   ├── errors.py              # Error Classification（02 第 21 节 / 04 第 32 节）
+│   │   ├── ids.py                 # UUID 解析 + 跨 KB 归属断言 assert_same_kb
+│   │   ├── retry.py               # Provider 瞬时失败重试（退避）
+│   │   ├── startup.py             # 启动一致性校验（Embedding 维度 / 版本）
 │   │   ├── logging.py
 │   │   └── versions.py            # PARSER_VERSION / CHUNKER_VERSION 等常量
 │   ├── api/
@@ -33,9 +36,10 @@ repo/
 │   │   │   ├── documents.py
 │   │   │   ├── ingestion_jobs.py
 │   │   │   ├── query.py           # SSE 流式端点
+│   │   │   ├── agent.py           # SSE 自主决策端点
 │   │   │   ├── answers.py         # Evidence 按需查询
 │   │   │   └── conversations.py
-│   │   └── schemas/               # 请求 / 响应模型
+│   │   └── schemas.py             # 请求 / 响应模型
 │   ├── domain/
 │   │   ├── document/
 │   │   ├── section/
@@ -46,16 +50,24 @@ repo/
 │   ├── services/
 │   │   ├── query_service.py       # Query Pipeline 编排
 │   │   ├── ingestion_service.py
-│   │   ├── document_service.py
-│   │   └── knowledge_base_service.py
+│   │   ├── knowledge_base_service.py
+│   │   ├── conversation_service.py
+│   │   ├── cleanup_service.py     # 软删除物理清理与孤儿向量对账
+│   │   └── queue.py               # Redis 任务队列客户端（Worker 快速通道）
+│   ├── agent/                     # Agent 自主决策路径（/v1/agent）
+│   │   ├── adapters.py            # LangChain 适配（可缺失，缺失时 agent 503）
+│   │   └── runner.py              # ReAct 决策循环：工具调用 / 收敛 / 会话接续 / 答案落库
 │   ├── ingestion/
 │   │   ├── pipeline.py            # Job 各 Stage 编排
 │   │   ├── parsers/
 │   │   │   ├── base.py            # Parser Protocol
-│   │   │   └── markdown.py        # v0.1
+│   │   │   ├── markdown.py
+│   │   │   ├── html.py
+│   │   │   └── pdf.py
 │   │   ├── chunkers/
-│   │   │   ├── semantic.py
-│   │   │   └── token_split.py
+│   │   │   ├── semantic.py        # 语义切块器（编排 + 协议 + 数据模型）
+│   │   │   ├── semantic_split.py  # 依赖 Embedding 的断点切分实现（可选，默认关）
+│   │   │   └── token_split.py     # token 兜底切分
 │   │   └── metadata.py            # Metadata Resolution / 冲突检测
 │   ├── retrieval/
 │   │   ├── planner.py             # Intent -> Strategy
@@ -66,7 +78,7 @@ repo/
 │   │   └── context/               # Builder / Expansion / Version Grouping / Token Budget
 │   ├── llm/
 │   │   ├── interface.py           # LLM Protocol
-│   │   ├── providers/             # OpenAI / Anthropic / Local ...
+│   │   ├── providers/             # OpenAI 兼容实现
 │   │   ├── prompts/
 │   │   │   ├── loader.py          # DB 加载 + 缓存 + 热更新
 │   │   │   └── seed/              # 首次部署导入的模板文件
@@ -78,7 +90,9 @@ repo/
 │   │   ├── interface.py
 │   │   └── providers/
 │   ├── storage/
-│   │   ├── postgres/              # Repository（KB / Document / Chunk / Job / Trace / Prompt）
+│   │   ├── postgres/              # 引擎 / ORM / repositories/（按聚合拆包）
+│   │   │   └── repositories/      #   KB / Document / Section / Chunk / Job /
+│   │   │                          #   Conversation / Trace / Prompt（各一模块）
 │   │   ├── qdrant/                # VectorStore 实现
 │   │   └── keyword/               # KeywordStore 实现（PG FTS + pg_trgm）
 │   ├── tracing/
@@ -86,10 +100,10 @@ repo/
 │   ├── evaluation/
 │   │   ├── interfaces.py          # 07 第 9 节的预留 Protocol
 │   │   └── scoring.py             # recall@k 等可脚本计算的指标
-│   └── tools/                     # 预留，v0.1 不实现 Tool Router
+│   └── tools/                     # Agent 工具层：契约 + 内置检索工具（作用域限定当前 KB）
 ├── workers/
 │   └── ingestion_worker.py        # 消费 Queue 执行 Ingestion Pipeline
-├── migrations/                    # Alembic，首个版本即 09 的 DDL
+├── migrations/                    # Alembic，首个版本即 09 的 DDL（当前未接入版本脚本）
 ├── tests/
 │   ├── unit/
 │   ├── integration/
@@ -98,8 +112,11 @@ repo/
 │       └── fixtures/              # Fixture 文档
 ├── scripts/
 │   ├── init_db.sql                # 09-database-schema.md 的可执行版本
+│   ├── migrate_*.sql              # 增量迁移（0.2 / 0.3 / 0.4 / 0.5），幂等可重复
 │   └── seed_prompts.py            # 导入 Prompt Seed
-├── docs/
+├── docs/                          # 规格文档（00 为上位 Skill，01-10 为实现级规格）
+│   └── private-knowledge-rag/
+├── web/                           # 前端（Next.js 14 + React + TS），独立部署，rewrites 代理 /v1
 └── pyproject.toml
 ```
 
@@ -133,6 +150,7 @@ domain  ←  ingestion / retrieval / llm / embedding / reranker / tracing
 | Error Classification 常量 | `app/core/errors.py` |
 | Parser / Chunker / Embedding 版本号 | `app/core/versions.py` |
 | 知识库作用域解析 | `app/api/deps.py` |
+| 跨 KB 归属断言（防 IDOR / 越权） | `app/core/ids.py` |
 | Metadata Filter 构建 | `app/retrieval/filters.py` |
 | RRF 融合参数 | `app/core/config.py`（配置项，非硬编码） |
 | Prompt Seed 模板 | `app/llm/prompts/seed/` |
@@ -178,4 +196,5 @@ eval          Eval Dataset 与 Fixture（见 07，v0.1 人工执行，脚本只�
 7. Prompt Seed 只是初始版本，运行时以数据库为准。
 8. `embedding_dimension` 与 Qdrant Collection 不一致时启动必须失败。
 9. 知识库作用域、Version 过滤、Soft Delete 生效必须有自动化测试覆盖。
-10. v0.1 不实现的目录（`tools`、自动化 Evaluation Runner）只放接口与注释，不放半成品逻辑。
+10. 预留未实现的目录（如自动化 Evaluation Runner）只放接口与注释，不放半成品逻辑；
+    `tools` 已随 Agent 落地为实现代码（契约 + 内置工具，作用域限定当前 KB）。
