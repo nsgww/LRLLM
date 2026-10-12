@@ -24,6 +24,21 @@ const NAV: { key: View; label: string; icon: React.ReactNode }[] = [
   { key: "kb", label: "知识库管理", icon: <Database className="h-4 w-4" /> },
 ];
 
+function relativeTime(iso?: string): string {
+  if (!iso) return "";
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "";
+  const diff = Date.now() - then;
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return "刚刚";
+  if (min < 60) return `${min} 分钟前`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr} 小时前`;
+  const day = Math.floor(hr / 24);
+  if (day < 30) return `${day} 天前`;
+  return new Date(iso).toLocaleDateString("zh-CN");
+}
+
 export function AppSidebar() {
   const {
     kbs,
@@ -42,20 +57,22 @@ export function AppSidebar() {
   return (
     <aside className="flex h-full w-72 flex-col border-r bg-card/50">
       {/* Brand */}
-      <div className="flex items-center gap-2 px-4 py-4">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+      <div className="flex items-center gap-2.5 px-4 py-4">
+        <div className="animate-gradient relative flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary via-violet-500 to-primary text-primary-foreground shadow-md shadow-primary/25">
           <BookOpen className="h-4 w-4" />
         </div>
         <div>
-          <div className="text-sm font-semibold leading-none">LRLLM</div>
-          <div className="text-xs text-muted-foreground">私有知识库 RAG</div>
+          <div className="text-gradient animate-gradient text-sm font-bold leading-none">
+            LRLLM
+          </div>
+          <div className="mt-1 text-xs text-muted-foreground">私有知识库 RAG</div>
         </div>
       </div>
 
       {/* KB selector */}
       <div className="flex items-center gap-2 px-4 pb-3">
         {kbsLoading ? (
-          <Skeleton className="h-9 flex-1" />
+          <Skeleton className="h-9 flex-1 shimmer" />
         ) : (
           <Select
             value={selectedKbId ?? undefined}
@@ -83,7 +100,7 @@ export function AppSidebar() {
       <div className="px-4 py-3">
         <Button
           variant="secondary"
-          className="w-full justify-start gap-2"
+          className="w-full justify-start gap-2 transition-transform duration-200 hover:scale-[1.02]"
           onClick={newConversation}
           disabled={!selectedKbId}
         >
@@ -106,18 +123,24 @@ export function AppSidebar() {
                 <div
                   key={c.id}
                   className={cn(
-                    "group flex items-center gap-1 rounded-md px-2 py-1.5 text-sm",
+                    "group relative flex items-center gap-1 rounded-md px-2 py-1.5 text-sm transition-colors",
                     active
                       ? "bg-accent text-accent-foreground"
                       : "text-foreground/80 hover:bg-accent/60",
                   )}
                 >
+                  {active && (
+                    <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-primary" />
+                  )}
                   <button
-                    className="min-w-0 flex-1 truncate text-left"
+                    className="min-w-0 flex-1 text-left"
                     onClick={() => selectConversation(c.id)}
                     title={c.title}
                   >
-                    {c.title}
+                    <span className="block truncate">{c.title}</span>
+                    <span className="block text-[11px] text-muted-foreground">
+                      {relativeTime(c.created_at)}
+                    </span>
                   </button>
                   <Button
                     variant="ghost"
@@ -155,6 +178,10 @@ export function AppSidebar() {
         </div>
         <ModeToggle />
       </div>
+
+      <p className="px-4 pb-3 text-center text-[10px] leading-relaxed text-muted-foreground/70">
+        回答基于知识库证据生成，请注意核对
+      </p>
     </aside>
   );
 }

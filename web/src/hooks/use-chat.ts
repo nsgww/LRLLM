@@ -16,6 +16,7 @@ export interface ChatMessage {
   context_token_count?: number | null;
   pending?: boolean;
   error?: string;
+  created_at?: string;
 }
 
 function uid() {
@@ -59,6 +60,7 @@ export function useChat() {
             role: m.role === "USER" ? "user" : "assistant",
             content: m.content,
             answer_id: m.answer_id,
+            created_at: m.created_at ?? undefined,
           })),
         );
       })
@@ -83,12 +85,18 @@ export function useChat() {
       const text = query.trim();
       if (!text || !selectedKbId || streaming) return;
 
-      const userMessage: ChatMessage = { id: uid(), role: "user", content: text };
+      const userMessage: ChatMessage = {
+        id: uid(),
+        role: "user",
+        content: text,
+        created_at: new Date().toISOString(),
+      };
       const assistantMessage: ChatMessage = {
         id: uid(),
         role: "assistant",
         content: "",
         pending: true,
+        created_at: new Date().toISOString(),
       };
       setMessages((prev) => [...prev, userMessage, assistantMessage]);
       setStreaming(true);

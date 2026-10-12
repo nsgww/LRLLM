@@ -11,7 +11,7 @@ export default function Home() {
   return (
     <div className="flex h-screen w-full overflow-hidden">
       <AppSidebar />
-      <main className="min-w-0 flex-1 bg-background">
+      <main className="bg-glow relative min-w-0 flex-1 bg-background">
         {view === "chat" ? <ChatView /> : <KbManager />}
       </main>
     </div>
