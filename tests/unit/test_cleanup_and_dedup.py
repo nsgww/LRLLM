@@ -74,6 +74,10 @@ def test_kb_soft_delete_removes_vectors(monkeypatch):
         "app.services.knowledge_base_service.DocumentRepository",
         lambda session: _FakeChildRepo(session),
     )
+    monkeypatch.setattr(
+        "app.services.knowledge_base_service.WikiPageRepository",
+        lambda session: _FakeChildRepo(session),
+    )
 
     asyncio.run(service.soft_delete("kb-1"))
 

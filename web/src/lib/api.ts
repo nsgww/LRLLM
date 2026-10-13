@@ -40,8 +40,26 @@ async function parseError(response: Response): Promise<never> {
     message: `Request failed with status ${response.status}`,
   };
   try {
-    const json = (await response.json()) as { error?: ApiErrorBody };
-    if (json.error) body = json.error;
+    const json = (await response.json()) as { error?: ApiErrorBody; detail?: unknown };
+    if (json.error) {
+      body = json.error;
+    } else if (json.detail) {
+      // FastAPI 参数校验失败返回 {detail:[{loc,msg}]}，转成可读信息，避免只显示
+      // "Request failed with status 422" 而看不到是哪个字段非法。
+      const detail = json.detail;
+      const message = Array.isArray(detail)
+        ? detail
+            .map((d) => {
+              const loc = Array.isArray(d?.loc) ? d.loc.join(".") : "";
+              return d?.msg ? (loc ? `${loc}: ${d.msg}` : d.msg) : "";
+            })
+            .filter(Boolean)
+            .join("; ") || `Request failed with status ${response.status}`
+        : typeof detail === "string"
+          ? detail
+          : `Request failed with status ${response.status}`;
+      body = { code: `HTTP_${response.status}`, stage: null, message };
+    }
   } catch {
     // non-JSON error body; keep the synthesized fallback
   }
@@ -118,33 +136,35 @@ export function listDocuments(
   return request<Page<DocumentItem>>(`/documents?${params}`, {}, kbId);
 }
 
-export function deleteDocument(documentId: string): Promise<void> {
-  return request<void>(`/documents/${documentId}`, { method: "DELETE" });
+export function deleteDocument(kbId: string, documentId: string): Promise<void> {
+  return request<void>(`/documents/${documentId}`, { method: "DELETE" }, kbId);
 }
 
-export function reindexDocument(documentId: string): Promise<UploadResult> {
-  return request<UploadResult>(`/documents/${documentId}/reindex`, { method: "POST" });
+export function reindexDocument(kbId: string, documentId: string): Promise<UploadResult> {
+  return request<UploadResult>(`/documents/${documentId}/reindex`, { method: "POST" }, kbId);
 }
 
 // ---------- Ingestion Jobs ----------
 
-export function getIngestionJob(jobId: string): Promise<IngestionJob> {
-  return request<IngestionJob>(`/ingestion-jobs/${jobId}`);
+export function getIngestionJob(kbId: string, jobId: string): Promise<IngestionJob> {
+  return request<IngestionJob>(`/ingestion-jobs/${jobId}`, {}, kbId);
 }
 
 export function listIngestionJobs(
+  kbId: string,
   opts: { status?: string; limit?: number; cursor?: string } = {},
 ): Promise<Page<IngestionJob>> {
   const params = new URLSearchParams();
   if (opts.status) params.set("status", opts.status);
   if (opts.limit) params.set("limit", String(opts.limit));
   if (opts.cursor) params.set("cursor", opts.cursor);
-  return request<Page<IngestionJob>>(`/ingestion-jobs?${params}`);
+  return request<Page<IngestionJob>>(`/ingestion-jobs?${params}`, {}, kbId);
 }
 
 // ---------- Conversations ----------
 
 export function listConversationMessages(
+  kbId: string,
   conversationId: string,
   opts: { limit?: number; cursor?: string } = {},
 ): Promise<Page<ConversationMessage>> {
@@ -153,6 +173,8 @@ export function listConversationMessages(
   if (opts.cursor) params.set("cursor", opts.cursor);
   return request<Page<ConversationMessage>>(
     `/conversations/${conversationId}/messages?${params}`,
+    {},
+    kbId,
   );
 }
 

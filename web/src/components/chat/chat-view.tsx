@@ -27,7 +27,8 @@ function ThinkingDots() {
 
 export function ChatView() {
   const { selectedKbId, activeConversationId, setView } = useApp();
-  const { messages, send, streaming, loadingHistory, stop } = useChat();
+  const { messages, send, streaming, loadingHistory, historyError, reloadHistory } =
+    useChat();
   const bottomRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
@@ -45,6 +46,14 @@ export function ChatView() {
         <div className="bg-dots pointer-events-none absolute inset-0 opacity-60 [mask-image:radial-gradient(ellipse_at_top,black,transparent_70%)]" />
 
         <div className="relative mx-auto flex max-w-3xl flex-col gap-6 px-4 py-6">
+          {historyError && (
+            <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <span>历史加载失败：{historyError}</span>
+              <Button variant="ghost" size="sm" onClick={() => reloadHistory()}>
+                重试
+              </Button>
+            </div>
+          )}
           {loadingHistory ? (
             <div className="space-y-4">
               <Skeleton className="ml-auto h-14 w-2/3 rounded-2xl shimmer" />

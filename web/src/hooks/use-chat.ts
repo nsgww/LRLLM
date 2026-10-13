@@ -28,6 +28,8 @@ export function useChat() {
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = React.useState(false);
   const [loadingHistory, setLoadingHistory] = React.useState(false);
+  const [historyError, setHistoryError] = React.useState<string | null>(null);
+  const [reloadToken, setReloadToken] = React.useState(0);
   const abortRef = React.useRef<AbortController | null>(null);
 
   // Abort any in-flight stream when the chat view unmounts (e.g. switching to
@@ -42,15 +44,17 @@ export function useChat() {
 
   // Load conversation history (API returns newest-first; render chronologically).
   React.useEffect(() => {
+    void reloadToken; // 手动重载触发器（reloadHistory 使其 +1）
     abortRef.current?.abort();
     setStreaming(false);
-    if (!activeConversationId) {
+    if (!activeConversationId || !selectedKbId) {
       setMessages([]);
+      setHistoryError(null);
       return;
     }
     let cancelled = false;
     setLoadingHistory(true);
-    listConversationMessages(activeConversationId, { limit: 200 })
+    listConversationMessages(selectedKbId, activeConversationId, { limit: 200 })
       .then((page) => {
         if (cancelled) return;
         const ordered = [...page.items].reverse();
@@ -63,9 +67,13 @@ export function useChat() {
             created_at: m.created_at ?? undefined,
           })),
         );
+        setHistoryError(null);
       })
-      .catch(() => {
-        if (!cancelled) setMessages([]);
+      .catch((err) => {
+        if (cancelled) return;
+        // 不再把加载失败吞成"空对话"：暴露错误，便于用户感知与重试。
+        setMessages([]);
+        setHistoryError(err instanceof Error ? err.message : "加载历史失败");
       })
       .finally(() => {
         if (!cancelled) setLoadingHistory(false);
@@ -73,7 +81,7 @@ export function useChat() {
     return () => {
       cancelled = true;
     };
-  }, [activeConversationId]);
+  }, [activeConversationId, selectedKbId, reloadToken]);
 
   const stop = React.useCallback(() => {
     abortRef.current?.abort();
@@ -119,9 +127,11 @@ export function useChat() {
         )) {
           switch (event.event) {
             case "meta":
+              // 传入发送时锁定的 selectedKbId，避免流式中切换 KB 导致会话"串库"。
               ensureConversation(
                 event.data.conversation_id,
                 text.slice(0, 30) || "新的对话",
+                selectedKbId,
               );
               patch({ meta: event.data, answer_id: event.data.answer_id });
               break;
@@ -167,5 +177,13 @@ export function useChat() {
     [selectedKbId, activeConversationId, streaming, ensureConversation],
   );
 
-  return { messages, send, streaming, loadingHistory, stop };
+  return {
+    messages,
+    send,
+    streaming,
+    loadingHistory,
+    historyError,
+    reloadHistory: () => setReloadToken((t) => t + 1),
+    stop,
+  };
 }

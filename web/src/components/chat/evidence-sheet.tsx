@@ -29,10 +29,14 @@ export function EvidenceSheet({ answerId, disabled }: EvidenceSheetProps) {
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [items, setItems] = React.useState<EvidenceItem[]>([]);
-  const loaded = React.useRef(false);
+  const loaded = React.useRef<string | null>(null);
 
   React.useEffect(() => {
-    if (!open || loaded.current) return;
+    if (!open) return;
+    // Cache key includes KB + answer: switching either must reload, otherwise a
+    // stale cache would show another KB/answer's evidence.
+    const cacheKey = `${selectedKbId}:${answerId}`;
+    if (loaded.current === cacheKey) return;
     if (!selectedKbId) {
       setError("未选择知识库");
       return;
@@ -42,8 +46,7 @@ export function EvidenceSheet({ answerId, disabled }: EvidenceSheetProps) {
     getEvidence(selectedKbId, answerId)
       .then((res) => {
         setItems(res.evidence);
-        // Only cache on success: a failed load must allow a retry next open.
-        loaded.current = true;
+        loaded.current = cacheKey;
       })
       .catch((err) =>
         setError(err instanceof Error ? err.message : "加载证据失败"),

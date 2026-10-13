@@ -95,8 +95,20 @@ class RerankService:
                     [r.text for r in ordered_rows],
                     top_k=self._settings.rerank_top_n,
                 )
-                if not all(0 <= r.index < len(ordered_rows) for r in results):
+                n = len(ordered_rows)
+                # 去重：同一 index 重复出现只保留首个，避免重复 RankedChunk。
+                by_index: dict[int, object] = {}
+                for r in results:
+                    by_index.setdefault(r.index, r)
+                unique = list(by_index.values())
+                if not all(0 <= r.index < n for r in unique):
                     raise ValueError("reranker returned out-of-range index")
+                # 候选守恒（06 §7 / Non-Negotiable #5）：重排不得减少候选集。
+                expected = min(self._settings.rerank_top_n, n)
+                if len(unique) < expected:
+                    raise ValueError(
+                        f"reranker dropped candidates: {len(unique)} < {expected}"
+                    )
                 return RerankOutcome(
                     chunks=[
                         _to_ranked(
@@ -105,7 +117,7 @@ class RerankService:
                             sub_query_id,
                             parent_text_by_id,
                         )
-                        for r in results
+                        for r in unique
                     ]
                 )
             except Exception:

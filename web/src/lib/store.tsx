@@ -28,7 +28,7 @@ interface AppContextValue extends AppState {
   setView: (view: View) => void;
   newConversation: () => void;
   selectConversation: (id: string) => void;
-  ensureConversation: (id: string, title?: string) => void;
+  ensureConversation: (id: string, title?: string, kbId?: string) => void;
   removeConversation: (id: string) => void;
 }
 
@@ -111,17 +111,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const ensureConversation = React.useCallback(
-    (id: string, title?: string) => {
-      if (!selectedKbId) return;
+    (id: string, title?: string, kbId?: string) => {
+      // kbId 为发送时锁定的作用域；流式中切换 KB 时仍归属到原 KB，避免"串库"。
+      const targetKb = kbId ?? selectedKbId;
+      if (!targetKb) return;
       setConversationMap((map) => {
-        const existing = map[selectedKbId] ?? [];
+        const existing = map[targetKb] ?? [];
         if (existing.some((c) => c.id === id)) return map;
         const summary: ConversationSummary = {
           id,
           title: title || "新的对话",
           created_at: new Date().toISOString(),
         };
-        const next = { ...map, [selectedKbId]: [summary, ...existing] };
+        const next = { ...map, [targetKb]: [summary, ...existing] };
         saveConversations(next);
         return next;
       });

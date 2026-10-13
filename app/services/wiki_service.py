@@ -45,6 +45,22 @@ _EVIDENCE_MAX_CHARS = 4000
 
 
 @dataclass
+class _IndexPlan:
+    """Shadow-document index plan: DB half runs inside the caller's transaction,
+    vector half (``_apply_vectors``) runs only *after* commit (11 §6) so a
+    rolled-back transaction can never leave the old content vector-less."""
+
+    old_chunk_ids: list[str]
+    chunk_id: str
+    document_id: str
+    kb_id: str
+    page_id: str
+    slug: str
+    title: str
+    content: str
+
+
+@dataclass
 class WikiDistillResult:
     created: bool
     skipped: bool
@@ -158,8 +174,9 @@ class WikiService:
                 await pages.touch(
                     str(page.id), title=title, summary=summary, revision_count=version
                 )
-                await self._index(session, real_kb, str(page.id), slug, title, content)
+                plan = await self._index_db(session, real_kb, str(page.id), slug, title, content)
                 await session.commit()
+                await self._apply_vectors(plan)
                 return WikiDistillResult(
                     created=False,
                     skipped=False,
@@ -190,8 +207,9 @@ class WikiService:
                     change_note="新建自问答沉淀",
                 )
             )
-            await self._index(session, real_kb, page_id, slug, out.title or slug, out.content)
+            plan = await self._index_db(session, real_kb, page_id, slug, out.title or slug, out.content)
             await session.commit()
+            await self._apply_vectors(plan)
             return WikiDistillResult(
                 created=True,
                 skipped=False,
@@ -229,7 +247,7 @@ class WikiService:
     # ------------------------------------------------------------------ #
     # Index a published revision as a shadow document (single chunk)      #
     # ------------------------------------------------------------------ #
-    async def _index(
+    async def _index_db(
         self,
         session: AsyncSession,
         kb_id: str,
@@ -237,18 +255,21 @@ class WikiService:
         slug: str,
         title: str,
         content: str,
-    ) -> None:
+    ) -> _IndexPlan:
+        """DB half of shadow-document indexing (inside the caller's txn).
+
+        Retires the previous shadow document and creates the new chunk; vector
+        mutations are deferred to ``_apply_vectors`` after commit so a rolled
+        back transaction can never leave the old content vector-less.
+        """
         documents = DocumentRepository(session)
         chunks = ChunkRepository(session)
         content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
 
-        # Retire the previous shadow document (old vectors + chunks go away so
-        # only the latest revision is ever retrieved).
         old = await documents.get_by_wiki_page(kb_id, page_id)
+        old_chunk_ids: list[str] = []
         if old is not None:
             old_chunk_ids = await chunks.list_ids_by_document(str(old.id))
-            if old_chunk_ids:
-                await self._vector_store.delete(old_chunk_ids)
             await chunks.soft_delete_by_document(str(old.id))
             await documents.soft_delete(str(old.id))
 
@@ -268,8 +289,6 @@ class WikiService:
             )
         )
         document_id = str(doc_row.id)
-
-        vector = (await self._embedding.embed_documents([f"{title}\n{content}"]))[0]
         chunk = Chunk(
             document_id=document_id,
             section_id=None,
@@ -286,29 +305,52 @@ class WikiService:
             embedding_model_version=self._embedding.model_version,
         )
         chunk_id = (await chunks.bulk_create([chunk]))[0]
-
-        await self._vector_store.upsert(
-            [
-                VectorPoint(
-                    chunk_id=chunk_id,
-                    vector=vector,
-                    payload={
-                        "knowledge_base_id": kb_id,
-                        "document_id": document_id,
-                        "section_id": None,
-                        "chunk_id": chunk_id,
-                        "product": None,
-                        "version": None,
-                        "doc_class": "wiki",
-                        "chunk_type": "TEXT",
-                        "source_type": "wiki",
-                        "wiki_page_id": page_id,
-                        "title": title,
-                        "slug": slug,
-                    },
-                )
-            ]
+        return _IndexPlan(
+            old_chunk_ids=old_chunk_ids,
+            chunk_id=chunk_id,
+            document_id=document_id,
+            kb_id=kb_id,
+            page_id=page_id,
+            slug=slug,
+            title=title,
+            content=content,
         )
+
+    async def _apply_vectors(self, plan: _IndexPlan) -> None:
+        """Vector half — call only after commit. Failures are logged, not raised:
+        the page is already committed; vector recall can be rebuilt later."""
+        try:
+            if plan.old_chunk_ids:
+                await self._vector_store.delete(plan.old_chunk_ids)
+            vector = (await self._embedding.embed_documents([f"{plan.title}\n{plan.content}"]))[0]
+            await self._vector_store.upsert(
+                [
+                    VectorPoint(
+                        chunk_id=plan.chunk_id,
+                        vector=vector,
+                        payload={
+                            "knowledge_base_id": plan.kb_id,
+                            "document_id": plan.document_id,
+                            "section_id": None,
+                            "chunk_id": plan.chunk_id,
+                            "product": None,
+                            "version": None,
+                            "doc_class": "wiki",
+                            "chunk_type": "TEXT",
+                            "source_type": "wiki",
+                            "wiki_page_id": plan.page_id,
+                            "title": plan.title,
+                            "slug": plan.slug,
+                        },
+                    )
+                ]
+            )
+        except Exception:
+            logger.warning(
+                "wiki shadow-document vector apply failed for page %s",
+                plan.page_id,
+                exc_info=True,
+            )
 
     # ------------------------------------------------------------------ #
     # Read / delete                                                       #

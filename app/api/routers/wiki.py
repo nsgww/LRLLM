@@ -7,6 +7,8 @@ from fastapi import APIRouter, Depends, Query, Request
 
 from app.api.deps import require_api_key, require_kb_id
 from app.api.pagination import decode_cursor, next_cursor
+from app.core.config import get_settings
+from app.core.errors import AppError
 from app.api.schemas import (
     Page,
     WikiDistillOut,
@@ -15,7 +17,20 @@ from app.api.schemas import (
     WikiRevisionOut,
 )
 
-router = APIRouter(tags=["wiki"], dependencies=[Depends(require_api_key)])
+async def _require_wiki_enabled() -> None:
+    """11 §7：RAG_WIKI_ENABLED=false 时所有 wiki 端点返回 503。"""
+    if not get_settings().wiki_enabled:
+        raise AppError(
+            code="WIKI_DISABLED",
+            message="LLM Wiki is disabled (RAG_WIKI_ENABLED=false)",
+            http_status=503,
+        )
+
+
+router = APIRouter(
+    tags=["wiki"],
+    dependencies=[Depends(require_api_key), Depends(_require_wiki_enabled)],
+)
 
 
 def _page_out(row) -> WikiPageOut:

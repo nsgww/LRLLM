@@ -23,7 +23,9 @@ def build_metadata_filter(
         version = understanding.version
     if sub_query is not None:
         product = sub_query.product or product
-        version = sub_query.version or version
+        # 用户显式指定的 version 是硬边界，子查询不得覆盖（06 Non-Negotiable #2）；
+        # 仅当用户未指定 version 时才允许子查询补充。
+        version = version or sub_query.version
     return MetadataFilter(
         knowledge_base_id=knowledge_base_id,
         product=product,

@@ -12,7 +12,7 @@
 - 每个片段中始终包含标题路径。
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from app.core.config import Settings
 from app.domain.retrieval import RankedChunk
@@ -49,9 +49,18 @@ class ContextBuilder:
         for chunk in chunks:
             cost = self._counter.count(_body(chunk, expand))
             if context.token_count + cost > budget:
-                # 02 section 15: higher-ranked evidence wins. `chunks` is in
-                # score order, so the first unit that does not fit ends the
-                # selection rather than letting lower-ranked ones jump ahead.
+                # 04 §17.1：父块全文超预算时回退到该子块自身文本，而非整条丢弃；
+                # 仅当子块也放不下时才结束（02 §15 高分优先，不让低分块插队）。
+                if expand and chunk.parent_content and chunk.text:
+                    fallback_cost = self._counter.count(chunk.text)
+                    if context.token_count + fallback_cost <= budget:
+                        # 去掉 parent_content/raw_content，使 _format 也用子块文本，
+                        # 与这里的 token 计数保持一致。
+                        selected.append(
+                            replace(chunk, parent_content=None, raw_content=None)
+                        )
+                        context.token_count += fallback_cost
+                        continue
                 break
             selected.append(chunk)
             context.token_count += cost

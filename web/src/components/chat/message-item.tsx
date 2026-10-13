@@ -42,6 +42,7 @@ export function MessageItem({ message, thinking }: MessageItemProps) {
   const showEvidence =
     !isUser &&
     !!message.answer_id &&
+    !message.pending &&
     (message.evidence_status === "SUPPORTED" ||
       message.evidence_status === "PARTIALLY_SUPPORTED");
   const time = formatTime(message.created_at);

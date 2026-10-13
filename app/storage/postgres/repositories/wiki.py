@@ -61,7 +61,9 @@ class WikiPageRepository:
                 WikiPageRow.knowledge_base_id == parse_uuid(kb_id),
                 WikiPageRow.deleted_at.is_(None),
             )
-            .order_by(WikiPageRow.updated_at.desc(), WikiPageRow.id.desc())
+            # 排序列必须与 keyset 游标列一致（pagination 用 created_at 编码），
+            # 否则 touch() 抬升 updated_at 后翻页会漏页/重页。
+            .order_by(WikiPageRow.created_at.desc(), WikiPageRow.id.desc())
             .limit(limit + 1)
         )
         stmt = _apply_cursor(stmt, WikiPageRow, cursor, descending=True)
@@ -105,6 +107,21 @@ class WikiPageRepository:
             )
             .values(deleted_at=datetime.now(UTC))
         )
+
+    async def list_deleted_ids(self, limit: int) -> list:
+        """Ids of soft-deleted pages pending physical purge."""
+        stmt = (
+            sa.select(WikiPageRow.id)
+            .where(WikiPageRow.deleted_at.is_not(None))
+            .limit(limit)
+        )
+        return list((await self._session.execute(stmt)).scalars().all())
+
+    async def hard_delete_ids(self, ids: list) -> None:
+        """Physically delete pages; revisions cascade via page_id FK."""
+        if not ids:
+            return
+        await self._session.execute(sa.delete(WikiPageRow).where(WikiPageRow.id.in_(ids)))
 
 
 class WikiRevisionRepository:

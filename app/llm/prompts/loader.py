@@ -6,6 +6,7 @@
 - 带 TTL 的本地缓存；热修改在几秒内生效。
 """
 
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -73,8 +74,11 @@ class PromptLoader:
     @staticmethod
     def render(template: PromptTemplate, variables: dict[str, str]) -> str:
         """Replace {{name}} placeholders. Missing declared variables fail
-        loudly; user/retrieval content is always injected as data."""
-        content = template.content
+        loudly; user/retrieval content is always injected as data.
+
+        使用一次性正则替换：即使某个取值中本身含有 ``{{其他变量}}``，也不会被
+        二次展开，避免用户输入借此注入别的变量内容（prompt 注入硬化）。
+        """
         for name in template.variables:
             if name not in variables:
                 raise AppError(
@@ -82,5 +86,11 @@ class PromptLoader:
                     message=f"prompt '{template.key}' v{template.version} requires variable '{name}'",
                     stage=QueryStage.LLM_GENERATION,
                 )
-            content = content.replace("{{" + name + "}}", variables[name])
-        return content
+        declared = set(template.variables)
+        pattern = re.compile(r"{{(\w+)}}")
+
+        def _sub(match: "re.Match") -> str:
+            key = match.group(1)
+            return variables[key] if key in declared else match.group(0)
+
+        return pattern.sub(_sub, template.content)

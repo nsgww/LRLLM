@@ -15,7 +15,11 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.storage.base import VectorStore
-from app.storage.postgres.repositories import ChunkRepository, DocumentRepository
+from app.storage.postgres.repositories import (
+    ChunkRepository,
+    DocumentRepository,
+    WikiPageRepository,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +28,7 @@ logger = logging.getLogger(__name__)
 class CleanupReport:
     chunks_purged: int = 0
     documents_purged: int = 0
+    wiki_pages_purged: int = 0
     orphans_removed: int = 0
 
 
@@ -42,6 +47,7 @@ class CleanupService:
         report = CleanupReport()
         report.chunks_purged = await self._purge_chunks()
         report.documents_purged = await self._purge_documents()
+        report.wiki_pages_purged = await self._purge_wiki_pages()
         return report
 
     async def _purge_chunks(self) -> int:
@@ -65,6 +71,21 @@ class CleanupService:
             await repo.hard_delete_ids(document_ids)
             await session.commit()
             return len(document_ids)
+
+    async def _purge_wiki_pages(self) -> int:
+        """Physically purge soft-deleted wiki pages (11 §8.3).
+
+        Revisions cascade via the page_id FK ON DELETE CASCADE; the wiki
+        shadow document/chunk are purged by the document/chunk passes above.
+        """
+        async with self._session_factory() as session:
+            repo = WikiPageRepository(session)
+            page_ids = await repo.list_deleted_ids(self._batch_size)
+            if not page_ids:
+                return 0
+            await repo.hard_delete_ids(page_ids)
+            await session.commit()
+            return len(page_ids)
 
     async def reconcile_orphans(self) -> int:
         """Delete Qdrant points whose chunk row no longer exists (09 section 11).

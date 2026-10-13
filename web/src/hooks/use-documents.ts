@@ -19,6 +19,7 @@ export function useDocuments(kbId: string | null) {
   const [error, setError] = React.useState<string | null>(null);
   const [nextCursor, setNextCursor] = React.useState<string | null>(null);
   const [hasMore, setHasMore] = React.useState(false);
+  const [loadedMore, setLoadedMore] = React.useState(false);
   const [busyId, setBusyId] = React.useState<string | null>(null);
 
   const load = React.useCallback(
@@ -34,6 +35,7 @@ export function useDocuments(kbId: string | null) {
         setDocuments((prev) => (cursor ? [...prev, ...page.items] : page.items));
         setNextCursor(page.next_cursor);
         setHasMore(page.has_more);
+        setLoadedMore(Boolean(cursor));
       } catch (err) {
         setError(err instanceof Error ? err.message : "加载文档失败");
       } finally {
@@ -45,8 +47,9 @@ export function useDocuments(kbId: string | null) {
 
   const refresh = React.useCallback(() => load(), [load]);
   const loadMore = React.useCallback(() => {
-    if (nextCursor) void load(nextCursor);
-  }, [load, nextCursor]);
+    if (!nextCursor || loading) return;
+    void load(nextCursor);
+  }, [load, nextCursor, loading]);
 
   React.useEffect(() => {
     void load();
@@ -55,10 +58,11 @@ export function useDocuments(kbId: string | null) {
   // Auto-refresh while any document is still being ingested.
   React.useEffect(() => {
     const needsPoll = documents.some((d) => !TERMINAL.has(d.status));
-    if (!needsPoll) return;
+    // 用户加载过更多页时暂停轮询刷新：刷新第一页会把追加页覆盖丢失。
+    if (!needsPoll || loadedMore) return;
     const timer = window.setInterval(() => void load(), POLL_MS);
     return () => window.clearInterval(timer);
-  }, [documents, load]);
+  }, [documents, load, loadedMore]);
 
   const upload = React.useCallback(
     async (input: {
@@ -79,28 +83,30 @@ export function useDocuments(kbId: string | null) {
 
   const remove = React.useCallback(
     async (documentId: string) => {
+      if (!kbId) return;
       setBusyId(documentId);
       try {
-        await deleteDocument(documentId);
+        await deleteDocument(kbId, documentId);
         await refresh();
       } finally {
         setBusyId(null);
       }
     },
-    [refresh],
+    [kbId, refresh],
   );
 
   const reindex = React.useCallback(
     async (documentId: string) => {
+      if (!kbId) return;
       setBusyId(documentId);
       try {
-        await reindexDocument(documentId);
+        await reindexDocument(kbId, documentId);
         await refresh();
       } finally {
         setBusyId(null);
       }
     },
-    [refresh],
+    [kbId, refresh],
   );
 
   return {

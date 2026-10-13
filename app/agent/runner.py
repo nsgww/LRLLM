@@ -146,8 +146,18 @@ class AgentRunner:
                 knowledge_base_id, query, conversation_context, trace, answer_id, started
             ):
                 yield event
-            # 落库：把最终答案写回会话，与 /v1/query 的多轮行为一致。
+            # 落库先于 done（与 /v1/query 一致）：确保 persist/save_trace 失败时
+            # 以 error 收敛，且不会在已发 done 之后再发 error（05 §8/§14.3）。
             await self._persist(conversation_id, answer_id, trace.final_answer or "")
+            await self._save_trace(trace)
+            yield AgentEvent(
+                "done",
+                {
+                    "answer_id": answer_id,
+                    "steps": len(trace.agent_steps or []),
+                    "mode": "agent",
+                },
+            )
         except (LangChainUnavailableError, AppError) as exc:
             trace.error_stage = exc.stage
             trace.finish_stages()
@@ -258,11 +268,8 @@ class AgentRunner:
         trace.final_answer = "".join(streamed) or final_text
         trace.finish_stages()
         trace.latency_ms = int((time.perf_counter() - started) * 1000)
-        yield AgentEvent(
-            "done",
-            {"answer_id": answer_id, "steps": len(records), "mode": "agent"},
-        )
-        await self._save_trace(trace)
+        # done 事件与落库改由 run() 在 persist/save_trace 之后统一产出，
+        # 避免"先 done 后落库、落库失败又发 error"违反 05 §8/§14.3，也避免 trace 双写。
 
     # -- 内部实现 ----------------------------------------------------------
 

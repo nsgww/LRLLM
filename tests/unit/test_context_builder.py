@@ -107,13 +107,26 @@ def test_sibling_children_collapse_to_single_parent():
     assert built.text.count("full parent section text") == 1
 
 
-def test_parent_expansion_respects_token_budget():
+def test_parent_over_budget_falls_back_to_child_text():
+    """04 §17.1：父块全文超预算时回退到子块自身文本，而非整条丢弃。"""
     big_parent = " ".join(f"w{i}" for i in range(20))  # 20 tokens > budget 10
-    chunk = _child_with_parent("c1")
+    chunk = _child_with_parent("c1")  # text="child body" = 2 tokens
     chunk.parent_content = big_parent
     built = _builder(budget=10).build([chunk], version_specified=True)
-    assert built.chunks == []  # single over-budget chunk is never forced in
+    assert [c.chunk_id for c in built.chunks] == ["c1"]
+    assert "child body" in built.text
     assert big_parent not in built.text
+
+
+def test_child_also_over_budget_is_dropped():
+    """子块自身也超预算时，该命中被丢弃（不强行注入）。"""
+    big_parent = " ".join(f"w{i}" for i in range(20))
+    chunk = _child_with_parent("c1")
+    chunk.parent_content = big_parent
+    chunk.text = " ".join(f"t{i}" for i in range(30))  # 30 tokens > budget 10
+    built = _builder(budget=10).build([chunk], version_specified=True)
+    assert built.chunks == []
+    assert built.text == ""
 
 
 def test_expansion_disabled_keeps_child_text():

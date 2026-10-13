@@ -11,6 +11,7 @@ from app.storage.postgres.repositories import (
     ChunkRepository,
     DocumentRepository,
     KnowledgeBaseRepository,
+    WikiPageRepository,
 )
 
 
@@ -59,6 +60,7 @@ class KnowledgeBaseService:
         async with self._session_factory() as session:
             await ChunkRepository(session).soft_delete_by_kb(kb_id)
             await DocumentRepository(session).soft_delete_by_kb(kb_id)
+            await WikiPageRepository(session).soft_delete_by_kb(kb_id)
             await KnowledgeBaseRepository(session).soft_delete(kb_id)
             await session.commit()
         if self._vector_store is not None:
