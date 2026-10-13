@@ -83,6 +83,7 @@ LRLLM/
 | `08-prompt-spec.md` | Prompt 管理：存库、版本化、热修改、结构化输出与重试 |
 | `09-database-schema.md` | 建库契约，DDL 可直接执行（即 `scripts/init_db.sql`） |
 | `10-project-structure.md` | 项目结构与代码组织约定 |
+| `11-llm-wiki-spec.md` | LLM Wiki：grounded 问答沉淀为版本化页面并并入混合检索 |
 
 ## app/ — 应用代码
 
@@ -141,7 +142,7 @@ app/
 │   ├── interface.py         #   LLM Protocol（generate + stream）
 │   ├── providers/           #   OpenAI 兼容实现（可配 base_url）
 │   ├── prompts/loader.py    #   Prompt 从库加载，TTL 缓存，运行时热修改生效
-│   ├── prompts/seed/*.md    #   6 个种子模板（理解/改写/拆分/证据/回答/通用）
+│   ├── prompts/seed/*.md    #   7 个种子模板（理解/改写/拆分/证据/回答/通用/知识抽取-wiki）
 │   ├── schemas.py           #   结构化输出 schema
 │   └── parsing.py           #   JSON 提取 → 校验 → 一次重试 → 阶段错误
 ├── embedding/               # Embedding 接口 + OpenAI 兼容实现（providers/）
@@ -168,7 +169,7 @@ Next.js 14（App Router）+ React + TypeScript + Tailwind + shadcn/ui。
 
 ```text
 web/src/
-├── app/                # 路由（聊天页 / 知识库管理页）+ layout
+├── app/                # 单页：layout + page；侧边栏切换 对话 / 知识库管理 / 知识 Wiki 视图
 ├── components/         # UI 组件（chat/ 聊天与证据、kb/ 知识库管理、wiki/ 知识 Wiki、通用 ui/）
 ├── hooks/              # use-chat（SSE 流式）、use-documents
 └── lib/                # api.ts（/v1 客户端）、types.ts、store.tsx（全局状态）
@@ -210,7 +211,8 @@ npm run typecheck      # tsc --noEmit
 - `migrate_0.2.0.sql` / `migrate_0.3.0.sql` / `migrate_0.4.0.sql`：旧库增量迁移，
   幂等可重复执行：`psql -d <库名> -f scripts/<文件>`
 - `migrate_0.5.0.sql`：`documents.content` → BYTEA、`chunks.parent_chunk_id` → 级联删除
-- `seed_prompts.py`：把 `app/llm/prompts/seed/` 下的 6 个模板灌入 `prompt_templates` 表
+- `migrate_0.6.0.sql`：LLM Wiki — `wiki_pages` / `wiki_revisions` 表 + `documents` 影子标记列
+- `seed_prompts.py`：把 `app/llm/prompts/seed/` 下的 7 个模板灌入 `prompt_templates` 表
 
 > Schema 的权威事实源是 `scripts/*.sql`。`migrations/`（Alembic）目前只有 `env.py`、
 > 未接入版本脚本，暂不参与建库；需要版本化迁移时再补齐 `versions/`。

@@ -57,17 +57,20 @@ export function AppSidebar() {
 
   return (
     <aside className="flex h-full w-72 flex-col border-r bg-card/50">
-      {/* Brand */}
-      <div className="flex items-center gap-2.5 px-4 py-4">
-        <div className="animate-gradient relative flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary via-violet-500 to-primary text-primary-foreground shadow-md shadow-primary/25">
-          <BookOpen className="h-4 w-4" />
-        </div>
-        <div>
-          <div className="text-gradient animate-gradient text-sm font-bold leading-none">
-            LRLLM
+      {/* Brand + theme */}
+      <div className="flex items-center justify-between gap-2 px-4 py-4">
+        <div className="flex items-center gap-2.5">
+          <div className="animate-gradient relative flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary via-violet-500 to-primary text-primary-foreground shadow-md shadow-primary/25">
+            <BookOpen className="h-4 w-4" />
           </div>
-          <div className="mt-1 text-xs text-muted-foreground">私有知识库 RAG</div>
+          <div>
+            <div className="text-gradient animate-gradient text-sm font-bold leading-none">
+              LRLLM
+            </div>
+            <div className="mt-1 text-xs text-muted-foreground">私有知识库 RAG</div>
+          </div>
         </div>
+        <ModeToggle />
       </div>
 
       {/* KB selector */}
@@ -161,28 +164,21 @@ export function AppSidebar() {
 
       <Separator />
 
-      {/* Nav + theme */}
-      <div className="flex items-center justify-between gap-2 p-3">
-        <div className="flex gap-1">
-          {NAV.map((item) => (
-            <Button
-              key={item.key}
-              variant={view === item.key ? "secondary" : "ghost"}
-              size="sm"
-              className="gap-1.5"
-              onClick={() => setView(item.key)}
-            >
-              {item.icon}
-              {item.label}
-            </Button>
-          ))}
-        </div>
-        <ModeToggle />
+      {/* Nav */}
+      <div className="flex flex-wrap items-center gap-1.5 p-3">
+        {NAV.map((item) => (
+          <Button
+            key={item.key}
+            variant={view === item.key ? "secondary" : "ghost"}
+            size="sm"
+            className="gap-1.5"
+            onClick={() => setView(item.key)}
+          >
+            {item.icon}
+            {item.label}
+          </Button>
+        ))}
       </div>
-
-      <p className="px-4 pb-3 text-center text-[10px] leading-relaxed text-muted-foreground/70">
-        回答基于知识库证据生成，请注意核对
-      </p>
     </aside>
   );
 }

@@ -12,11 +12,14 @@ import {
 } from "@/components/ui/tooltip";
 
 export function ModeToggle() {
-  const { setTheme, theme } = useTheme();
+  const { setTheme, resolvedTheme } = useTheme();
   const [mounted, setMounted] = React.useState(false);
   React.useEffect(() => setMounted(true), []);
 
-  const isDark = mounted && theme === "dark";
+  // 用 resolvedTheme 而非 theme：theme 可能是 "system"（跟随系统），
+  // 此时 theme!=="dark" 会误判当前为亮色，导致图标与切换行为和实际不符
+  // （系统暗色下点按钮像"没反应"）。resolvedTheme 始终是实际生效值。
+  const isDark = mounted && resolvedTheme === "dark";
 
   return (
     <Tooltip>
