@@ -76,6 +76,7 @@ export interface EvidenceItem {
   document_id: string;
   document_title: string | null;
   chunk_id: string;
+  source_type?: "document" | "wiki" | null;
   product: string | null;
   version: string | null;
   heading_path: string | null;
@@ -103,3 +104,39 @@ export type QueryEvent =
   | { event: "evidence_status"; data: { status: EvidenceStatus } }
   | { event: "done"; data: { answer_id: string; context_token_count: number | null } }
   | { event: "error"; data: { error: ApiErrorBody } };
+
+/** LLM Wiki（docs/private-knowledge-rag/11-llm-wiki-spec） */
+export interface WikiPage {
+  id: string;
+  slug: string;
+  title: string;
+  summary: string;
+  status: string;
+  revision_count: number;
+  updated_at: string | null;
+}
+
+export interface WikiRevision {
+  version: number;
+  content: string;
+  change_note: string;
+  source_answer_id: string | null;
+  source_query: string;
+  evidence: unknown[];
+  created_at: string | null;
+}
+
+export interface WikiPageDetail extends WikiPage {
+  created_at: string | null;
+  revisions: WikiRevision[];
+}
+
+export interface WikiDistillResult {
+  created: boolean;
+  skipped: boolean;
+  page_id: string | null;
+  revision_version: number | null;
+  slug: string;
+  title: string;
+  reason: string;
+}

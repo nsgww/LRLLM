@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { BookOpen, Loader2 } from "lucide-react";
+import { BookMarked, BookOpen, Loader2 } from "lucide-react";
 
 import { getEvidence } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { useApp } from "@/lib/store";
 import type { EvidenceItem } from "@/lib/types";
 
 interface EvidenceSheetProps {
@@ -23,6 +24,7 @@ interface EvidenceSheetProps {
 }
 
 export function EvidenceSheet({ answerId, disabled }: EvidenceSheetProps) {
+  const { selectedKbId } = useApp();
   const [open, setOpen] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -31,9 +33,13 @@ export function EvidenceSheet({ answerId, disabled }: EvidenceSheetProps) {
 
   React.useEffect(() => {
     if (!open || loaded.current) return;
+    if (!selectedKbId) {
+      setError("未选择知识库");
+      return;
+    }
     setLoading(true);
     setError(null);
-    getEvidence(answerId)
+    getEvidence(selectedKbId, answerId)
       .then((res) => {
         setItems(res.evidence);
         // Only cache on success: a failed load must allow a retry next open.
@@ -43,7 +49,7 @@ export function EvidenceSheet({ answerId, disabled }: EvidenceSheetProps) {
         setError(err instanceof Error ? err.message : "加载证据失败"),
       )
       .finally(() => setLoading(false));
-  }, [open, answerId]);
+  }, [open, answerId, selectedKbId]);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -78,6 +84,12 @@ export function EvidenceSheet({ answerId, disabled }: EvidenceSheetProps) {
                     <span className="font-medium text-foreground">
                       {item.document_title || "未命名文档"}
                     </span>
+                    {item.source_type === "wiki" && (
+                      <span className="inline-flex items-center gap-1 rounded bg-violet-500/10 px-1.5 py-0.5 text-violet-600 dark:text-violet-400">
+                        <BookMarked className="h-3 w-3" />
+                        Wiki
+                      </span>
+                    )}
                     {item.product && (
                       <span className="rounded bg-secondary px-1.5 py-0.5">
                         {item.product}

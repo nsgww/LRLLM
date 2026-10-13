@@ -1,11 +1,15 @@
 "use client";
 
-import { AlertCircle, Bot, Clock, User } from "lucide-react";
+import * as React from "react";
+import { AlertCircle, BookMarked, Bot, Clock, Loader2, User } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { EvidenceBadge } from "@/components/chat/evidence-badge";
 import { EvidenceSheet } from "@/components/chat/evidence-sheet";
+import { Button } from "@/components/ui/button";
+import { distillAnswer } from "@/lib/api";
+import { useApp } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import type { ChatMessage } from "@/hooks/use-chat";
 
@@ -31,6 +35,9 @@ function MetaPill({ children }: { children: React.ReactNode }) {
 }
 
 export function MessageItem({ message, thinking }: MessageItemProps) {
+  const { selectedKbId } = useApp();
+  const [distilling, setDistilling] = React.useState(false);
+  const [distillMsg, setDistillMsg] = React.useState<string | null>(null);
   const isUser = message.role === "user";
   const showEvidence =
     !isUser &&
@@ -38,6 +45,26 @@ export function MessageItem({ message, thinking }: MessageItemProps) {
     (message.evidence_status === "SUPPORTED" ||
       message.evidence_status === "PARTIALLY_SUPPORTED");
   const time = formatTime(message.created_at);
+
+  const onDistill = async () => {
+    if (!selectedKbId || !message.answer_id) return;
+    setDistilling(true);
+    setDistillMsg(null);
+    try {
+      const r = await distillAnswer(selectedKbId, message.answer_id);
+      setDistillMsg(
+        r.skipped
+          ? "无增量，未沉淀"
+          : r.created
+            ? `已新建 Wiki 页面 v${r.revision_version}`
+            : `已更新 Wiki 页面至 v${r.revision_version}`,
+      );
+    } catch (err) {
+      setDistillMsg(err instanceof Error ? err.message : "沉淀失败");
+    } finally {
+      setDistilling(false);
+    }
+  };
 
   if (isUser) {
     return (
@@ -129,6 +156,27 @@ export function MessageItem({ message, thinking }: MessageItemProps) {
               </span>
             )}
             {showEvidence && <EvidenceSheet answerId={message.answer_id!} />}
+            {showEvidence && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-1.5"
+                disabled={distilling || !selectedKbId}
+                onClick={() => void onDistill()}
+              >
+                {distilling ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <BookMarked className="h-3.5 w-3.5" />
+                )}
+                沉淀到 Wiki
+              </Button>
+            )}
+            {distillMsg && (
+              <span className="text-[11px] text-muted-foreground">
+                {distillMsg}
+              </span>
+            )}
           </div>
         )}
       </div>

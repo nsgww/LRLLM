@@ -81,6 +81,7 @@ class EvidenceItemOut(BaseModel):
     document_id: str
     document_title: str | None
     chunk_id: str
+    source_type: str | None = None
     product: str | None
     version: str | None
     heading_path: str | None

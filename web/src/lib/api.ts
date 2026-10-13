@@ -10,6 +10,9 @@ import type {
   Page,
   QueryEvent,
   UploadResult,
+  WikiDistillResult,
+  WikiPage,
+  WikiPageDetail,
 } from "@/lib/types";
 
 const KB_HEADER = "X-Knowledge-Base-ID";
@@ -155,8 +158,42 @@ export function listConversationMessages(
 
 // ---------- Evidence ----------
 
-export function getEvidence(answerId: string): Promise<EvidenceResponse> {
-  return request<EvidenceResponse>(`/answers/${answerId}/evidence`);
+export function getEvidence(
+  kbId: string,
+  answerId: string,
+): Promise<EvidenceResponse> {
+  return request<EvidenceResponse>(`/answers/${answerId}/evidence`, {}, kbId);
+}
+
+// ---------- Wiki (LLM Wiki, 11-llm-wiki-spec) ----------
+
+export function listWikiPages(
+  kbId: string,
+  opts: { limit?: number; cursor?: string } = {},
+): Promise<Page<WikiPage>> {
+  const params = new URLSearchParams();
+  if (opts.limit) params.set("limit", String(opts.limit));
+  if (opts.cursor) params.set("cursor", opts.cursor);
+  return request<Page<WikiPage>>(`/wiki/pages?${params}`, {}, kbId);
+}
+
+export function getWikiPage(kbId: string, pageId: string): Promise<WikiPageDetail> {
+  return request<WikiPageDetail>(`/wiki/pages/${pageId}`, {}, kbId);
+}
+
+export function distillAnswer(
+  kbId: string,
+  answerId: string,
+): Promise<WikiDistillResult> {
+  return request<WikiDistillResult>(
+    `/wiki/answers/${answerId}/distill`,
+    { method: "POST" },
+    kbId,
+  );
+}
+
+export function deleteWikiPage(kbId: string, pageId: string): Promise<void> {
+  return request<void>(`/wiki/pages/${pageId}`, { method: "DELETE" }, kbId);
 }
 
 // ---------- Query (SSE) ----------

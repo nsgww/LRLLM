@@ -5,7 +5,7 @@ import * as React from "react";
 import { listKnowledgeBases } from "@/lib/api";
 import type { KnowledgeBase } from "@/lib/types";
 
-export type View = "chat" | "kb";
+export type View = "chat" | "kb" | "wiki";
 
 export interface ConversationSummary {
   id: string;

@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { BookOpen, Database, MessageSquarePlus, Trash2 } from "lucide-react";
+import { BookMarked, BookOpen, Database, MessageSquarePlus, Trash2 } from "lucide-react";
 
 import { ModeToggle } from "@/components/mode-toggle";
 import { NewKbDialog } from "@/components/kb/new-kb-dialog";
@@ -22,6 +22,7 @@ import { useApp, type View } from "@/lib/store";
 const NAV: { key: View; label: string; icon: React.ReactNode }[] = [
   { key: "chat", label: "对话", icon: <BookOpen className="h-4 w-4" /> },
   { key: "kb", label: "知识库管理", icon: <Database className="h-4 w-4" /> },
+  { key: "wiki", label: "知识 Wiki", icon: <BookMarked className="h-4 w-4" /> },
 ];
 
 function relativeTime(iso?: string): string {

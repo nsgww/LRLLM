@@ -169,7 +169,7 @@ Next.js 14（App Router）+ React + TypeScript + Tailwind + shadcn/ui。
 ```text
 web/src/
 ├── app/                # 路由（聊天页 / 知识库管理页）+ layout
-├── components/         # UI 组件（chat/ 聊天与证据、kb/ 知识库管理、通用 ui/）
+├── components/         # UI 组件（chat/ 聊天与证据、kb/ 知识库管理、wiki/ 知识 Wiki、通用 ui/）
 ├── hooks/              # use-chat（SSE 流式）、use-documents
 └── lib/                # api.ts（/v1 客户端）、types.ts、store.tsx（全局状态）
 ```
@@ -184,6 +184,12 @@ npm run typecheck      # tsc --noEmit
 > 前端禁用原始 HTML 渲染（无 `dangerouslySetInnerHTML` / `rehype-raw`），
 > Markdown 全靠 React 文本节点转义，防 XSS。密钥类环境变量只放服务端（Next 代理层），
 > 不注入客户端 bundle。
+
+### 知识 Wiki（LLM Wiki 前端）
+- 侧边导航"知识 Wiki"进入面板：页面列表（标题 / slug / 版本数 / 更新时间）、
+  点击查看详情（按版本展示 markdown 正文、变更说明、来源问题）、删除页面。
+- 对话证据面板中，来自 wiki 的片段带 "Wiki" 徽章（后端 `source_type` 标注）。
+- 对有依据的回答可手动"沉淀到 Wiki"；合格的问答也会自动沉淀（见 11-llm-wiki-spec）。
 
 ## workers/ — 后台进程
 

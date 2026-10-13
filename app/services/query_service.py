@@ -657,6 +657,11 @@ class QueryService:
             doc_ids = {c["document_id"] for c in selected}
             doc_rows = await DocumentRepository(session).get_many(list(doc_ids))
             doc_titles = {str(d.id): d.title for d in doc_rows}
+            # LLM Wiki（11 节 5）：wiki 影子 document 的 source_type='wiki'，
+            # 供前端在证据上标注"来自 Wiki"。
+            doc_source_types = {
+                str(d.id): getattr(d, "source_type", "document") for d in doc_rows
+            }
 
         evidence = []
         for item in selected:
@@ -666,6 +671,7 @@ class QueryService:
                     "document_id": item["document_id"],
                     "document_title": doc_titles.get(item["document_id"]),
                     "chunk_id": item["chunk_id"],
+                    "source_type": doc_source_types.get(item["document_id"], "document"),
                     "product": item.get("product"),
                     "version": item.get("version"),
                     "heading_path": item.get("heading_path"),
