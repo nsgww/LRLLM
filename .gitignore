@@ -15,3 +15,6 @@ out/
 *.tsbuildinfo
 .env*.local
 .vercel
+
+# dev server stdout/stderr logs (never commit)
+web/.dev_*.log
