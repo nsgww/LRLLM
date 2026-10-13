@@ -29,6 +29,10 @@ class Document:
     embedding_model: str | None = None
     embedding_model_version: str | None = None
     processing_fingerprint: str | None = None
+    # LLM Wiki（11 3.3）：影子 document 标记。普通文档默认 'document'；
+    # wiki 派生文档为 'wiki'，并回指 wiki_page_id。
+    source_type: str = "document"
+    wiki_page_id: str | None = None
     status: DocumentStatus = DocumentStatus.PENDING
     error_code: str | None = None
     error_message: str | None = None

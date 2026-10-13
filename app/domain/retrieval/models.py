@@ -25,6 +25,8 @@ class MetadataFilter:
     product: str | None = None
     version: str | None = None
     doc_class: str | None = None
+    # LLM Wiki（11 节 5）：false 时混合检索排除 wiki 检索块（影子 document）。
+    include_wiki: bool = True
 
 
 @dataclass

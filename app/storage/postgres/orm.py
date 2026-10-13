@@ -16,6 +16,7 @@ from app.domain.chunk import ChunkType
 from app.domain.document import DocumentStatus
 from app.domain.ingestion import JobStatus
 from app.domain.retrieval import EvidenceStatus
+from app.domain.wiki import WikiStatus
 
 
 class Base(DeclarativeBase):
@@ -62,6 +63,11 @@ class DocumentRow(Base):
     created_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), server_default=sa.func.now())
     updated_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), server_default=sa.func.now())
     deleted_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    # LLM Wiki（11-llm-wiki-spec 3.3）：影子 document 标记。
+    # 普通文档为 'document'；由 wiki revision 派生、用于复用检索/清理体系的为 'wiki'。
+    # knowledge_base_id / wiki_page_id 沿用项目惯例不建 FK（见 QueryTraceRow）。
+    source_type: Mapped[str] = mapped_column(sa.Text, nullable=False, server_default="document")
+    wiki_page_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
 
 
 class SectionRow(Base):
@@ -227,3 +233,43 @@ class PromptTemplateRow(Base):
     created_by: Mapped[str | None] = mapped_column(sa.Text)
     created_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), server_default=sa.func.now())
     updated_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), server_default=sa.func.now())
+
+
+class WikiPageRow(Base):
+    __tablename__ = "wiki_pages"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    slug: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    title: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    summary: Mapped[str] = mapped_column(sa.Text, nullable=False, default="")
+    status: Mapped[WikiStatus] = mapped_column(
+        sa.Enum(WikiStatus, name="wiki_status", create_type=False),
+        nullable=False,
+        default=WikiStatus.PUBLISHED,
+    )
+    revision_count: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), server_default=sa.func.now())
+    updated_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), server_default=sa.func.now())
+    deleted_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+
+
+class WikiRevisionRow(Base):
+    __tablename__ = "wiki_revisions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    page_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), sa.ForeignKey("wiki_pages.id", ondelete="CASCADE"), nullable=False
+    )
+    version: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    content: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    source_answer_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    source_query: Mapped[str] = mapped_column(sa.Text, nullable=False, default="")
+    evidence: Mapped[dict] = mapped_column(JSONB, nullable=False, default=list)
+    change_note: Mapped[str] = mapped_column(sa.Text, nullable=False, default="")
+    status: Mapped[WikiStatus] = mapped_column(
+        sa.Enum(WikiStatus, name="wiki_status", create_type=False),
+        nullable=False,
+        default=WikiStatus.PUBLISHED,
+    )
+    created_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), server_default=sa.func.now())

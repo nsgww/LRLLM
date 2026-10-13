@@ -70,6 +70,7 @@ class QueryService:
         rerank_service: RerankService,
         evidence_checker: EvidenceChecker,
         context_builder: ContextBuilder,
+        wiki_service=None,
     ) -> None:
         self._settings = settings
         self._llm = llm
@@ -79,6 +80,9 @@ class QueryService:
         self._rerank = rerank_service
         self._evidence = evidence_checker
         self._context = context_builder
+        # LLM Wiki（11 节 4.1）：可选注入；为 None 时跳过自动沉淀，/v1/query 不受影响。
+        self._wiki = wiki_service
+        self._bg_tasks: set[asyncio.Task] = set()
 
     async def ask(
         self,
@@ -145,6 +149,8 @@ class QueryService:
             trace.finish_stages()
             trace.latency_ms = int((time.monotonic() - started) * 1000)
             await self._persist(conversation_id, answer_id, trace)
+            # LLM Wiki 自动沉淀（11 节 4.1）：后台执行、异常隔离，绝不阻断 SSE。
+            self._maybe_auto_distill(answer_id, trace)
 
             yield QueryEvent(
                 event="done",
@@ -205,7 +211,9 @@ class QueryService:
         trace.start_stage(QueryStage.METADATA_FILTER.value)
         planned: list[tuple[SubQuery, object]] = []
         for sq in sub_queries:
-            filters = build_metadata_filter(knowledge_base_id, understanding, sq)
+            filters = build_metadata_filter(
+                knowledge_base_id, understanding, sq, include_wiki=self._settings.wiki_in_retrieval
+            )
             trace.metadata_filters.append(
                 {
                     "sub_query_id": sq.id,
@@ -580,6 +588,41 @@ class QueryService:
             )
             await QueryTraceRepository(session).create(trace.to_row())
             await session.commit()
+
+    def _maybe_auto_distill(self, answer_id: str, trace: QueryTraceBuilder) -> None:
+        """Fire-and-forget auto distillation (11 4.1). Never raises."""
+        if self._wiki is None or not self._settings.wiki_enabled:
+            return
+        if (trace.evidence_status or "") not in ("SUPPORTED", "PARTIALLY_SUPPORTED"):
+            return
+        if self._settings.wiki_auto_min_evidence > 0:
+            selected = trace.selected_chunks
+            if isinstance(selected, list):
+                count = len(selected)
+            elif isinstance(selected, dict):
+                count = len(selected.get("chunks", []) or [])
+            else:
+                count = 0
+            if count < self._settings.wiki_auto_min_evidence:
+                return
+        task = asyncio.create_task(self._auto_distill(answer_id))
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+
+    async def _auto_distill(self, answer_id: str) -> None:
+        try:
+            result = await self._wiki.distill(answer_id)
+            if not result.skipped:
+                logger.info(
+                    "wiki auto-distilled answer %s -> page %s v%s (%s)",
+                    answer_id,
+                    result.page_id,
+                    result.revision_version,
+                    "created" if result.created else "updated",
+                )
+        except Exception:
+            # 自动沉淀是尽力而为：失败只记录，绝不影响已完成的回答与 SSE。
+            logger.exception("auto wiki distill failed for answer %s", answer_id)
 
     async def _save_trace(self, trace: QueryTraceBuilder) -> None:
         try:

@@ -46,6 +46,8 @@ class DocumentRepository:
             embedding_model=doc.embedding_model,
             embedding_model_version=doc.embedding_model_version,
             processing_fingerprint=doc.processing_fingerprint,
+            source_type=doc.source_type,
+            wiki_page_id=parse_uuid(doc.wiki_page_id) if doc.wiki_page_id else None,
             status=doc.status,
         )
         self._session.add(row)
@@ -64,6 +66,21 @@ class DocumentRepository:
             DocumentRow.knowledge_base_id == parse_uuid(kb_id),
             DocumentRow.content_hash == content_hash,
             DocumentRow.deleted_at.is_(None),
+        )
+        return (await self._session.execute(stmt)).scalar_one_or_none()
+
+    async def get_by_wiki_page(self, kb_id: str, wiki_page_id: str) -> DocumentRow | None:
+        """Latest live shadow document for a wiki page (11-llm-wiki-spec 3.3)."""
+        stmt = (
+            sa.select(DocumentRow)
+            .where(
+                DocumentRow.knowledge_base_id == parse_uuid(kb_id),
+                DocumentRow.wiki_page_id == parse_uuid(wiki_page_id),
+                DocumentRow.source_type == "wiki",
+                DocumentRow.deleted_at.is_(None),
+            )
+            .order_by(DocumentRow.created_at.desc())
+            .limit(1)
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
 

@@ -187,6 +187,12 @@ class Settings(BaseSettings):
     # 单轮 Agent 请求的 wall-clock 上限（秒），超时以 error 事件收敛
     agent_timeout_seconds: float = 180.0
 
+    # llm wiki（11-llm-wiki-spec section 7）：把查询沉淀的知识持续整理成版本化页面
+    wiki_enabled: bool = True            # 关闭时 wiki 端点 503、自动沉淀停；不影响 /v1/query
+    wiki_in_retrieval: bool = True       # 混合检索是否并入 wiki 检索块（影子 document）
+    wiki_max_content_tokens: int = 1200  # 单页面正文 token 上限（超出走 token_split 兜底）
+    wiki_auto_min_evidence: int = 1      # 自动沉淀所需的最少证据条数（0 表示不要求）
+
     # ingestion worker resilience
     ingestion_max_attempts: int = 3
     ingestion_retry_backoff_seconds: int = 30

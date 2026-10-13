@@ -14,6 +14,7 @@ def build_metadata_filter(
     knowledge_base_id: str,
     understanding: QueryUnderstanding | None = None,
     sub_query: SubQuery | None = None,
+    include_wiki: bool = True,
 ) -> MetadataFilter:
     product: str | None = None
     version: str | None = None
@@ -27,4 +28,5 @@ def build_metadata_filter(
         knowledge_base_id=knowledge_base_id,
         product=product,
         version=version,
+        include_wiki=include_wiki,
     )

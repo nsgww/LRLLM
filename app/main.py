@@ -23,6 +23,7 @@ from app.api.routers import (
     ingestion_jobs,
     knowledge_bases,
     query,
+    wiki,
 )
 from app.core.config import get_settings
 from app.core.errors import AppError
@@ -38,6 +39,7 @@ from app.retrieval.evidence import EvidenceChecker
 from app.retrieval.hybrid import HybridRetriever
 from app.retrieval.rerank import RerankService
 from app.services.conversation_service import ConversationService
+from app.services.wiki_service import WikiService
 from app.services.ingestion_service import IngestionService
 from app.services.knowledge_base_service import KnowledgeBaseService
 from app.services.query_service import QueryService
@@ -116,6 +118,18 @@ def create_app() -> FastAPI:
         hybrid = HybridRetriever(vector_store, keyword_store, embedding, settings)
         rerank_service = RerankService(reranker, session_factory, settings)
 
+        # LLM Wiki（11）：派生知识沉淀层。把 grounded 问答整理成版本化页面，
+        # 并以影子 document 参与混合检索。依赖均已有实例，直接装配。
+        wiki_service = WikiService(
+            session_factory,
+            llm=llm,
+            prompts=prompts,
+            vector_store=vector_store,
+            embedding=embedding,
+            settings=settings,
+        )
+        app.state.wiki_service = wiki_service
+
         app.state.session_factory = session_factory
         app.state.vector_store = vector_store
         app.state.kb_service = KnowledgeBaseService(session_factory, vector_store)
@@ -133,6 +147,7 @@ def create_app() -> FastAPI:
             rerank_service=rerank_service,
             evidence_checker=EvidenceChecker(llm, prompts),
             context_builder=ContextBuilder(settings),
+            wiki_service=wiki_service,
         )
         # 全局查询并发闸门：单次 /v1/query 最坏触发 ~7 次外部调用，
         # 不限流会让 LLM 配额被并发请求快速烧穿。按进程内共享信号量保护。
@@ -224,6 +239,7 @@ def create_app() -> FastAPI:
         agent,
         answers,
         conversations,
+        wiki,
     ):
         app.include_router(module.router, prefix=settings.api_prefix)
 

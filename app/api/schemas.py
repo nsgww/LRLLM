@@ -105,3 +105,45 @@ class MessageOut(BaseModel):
     content: str
     answer_id: str | None
     created_at: datetime | None
+
+
+class WikiPageOut(BaseModel):
+    id: str
+    slug: str
+    title: str
+    summary: str
+    status: str
+    revision_count: int
+    updated_at: datetime | None = None
+
+
+class WikiRevisionOut(BaseModel):
+    version: int
+    content: str
+    change_note: str
+    source_answer_id: str | None = None
+    source_query: str = ""
+    evidence: list = []
+    created_at: datetime | None = None
+
+
+class WikiPageDetailOut(BaseModel):
+    id: str
+    slug: str
+    title: str
+    summary: str
+    status: str
+    revision_count: int
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    revisions: list[WikiRevisionOut]
+
+
+class WikiDistillOut(BaseModel):
+    created: bool
+    skipped: bool
+    page_id: str | None = None
+    revision_version: int | None = None
+    slug: str = ""
+    title: str = ""
+    reason: str = ""

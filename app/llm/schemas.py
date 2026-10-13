@@ -44,3 +44,18 @@ class SubQueryOutput(BaseModel):
 
 class QueryDecompositionOutput(BaseModel):
     sub_queries: list[SubQueryOutput]
+
+
+class WikiExtractionOutput(BaseModel):
+    """LLM Wiki 抽取结果（11-llm-wiki-spec section 4.2）。
+
+    ``should_create=false`` 表示证据不足或无增量，调用方据此跳过沉淀；
+    其余字段留空。抽取失败的隔离与重试由 ``generate_json`` 承担。
+    """
+
+    should_create: bool = False
+    slug: str = ""
+    title: str = ""
+    summary: str = ""
+    content: str = ""
+    tags: list[str] = []

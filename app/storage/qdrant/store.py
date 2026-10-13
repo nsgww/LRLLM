@@ -24,6 +24,7 @@ PAYLOAD_INDEX_FIELDS = (
     "version",
     "doc_class",
     "chunk_type",
+    "source_type",
 )
 
 
@@ -105,7 +106,14 @@ class QdrantVectorStore:
             must.append(
                 qm.FieldCondition(key="doc_class", match=qm.MatchValue(value=filters.doc_class))
             )
-        return qm.Filter(must=must)
+        # LLM Wiki（11 节 5）：关闭 wiki 入库检索时，排除 source_type='wiki' 的
+        # 影子 document 向量块；默认并入。
+        must_not = []
+        if not filters.include_wiki:
+            must_not.append(
+                qm.FieldCondition(key="source_type", match=qm.MatchValue(value="wiki"))
+            )
+        return qm.Filter(must=must, must_not=must_not)
 
     async def upsert(self, points: list[VectorPoint]) -> None:
         # wait=True: the pipeline marks the document READY only after upsert

@@ -1,6 +1,6 @@
 ---
 name: private-knowledge-rag
-description: LRLLM 私有知识库 RAG 项目的规范入口。当需要改动或理解本项目任何行为之前，应先加载本 skill 再按任务打开对应规范：改检索/召回/融合/重排/参数读 06，改入库/解析/切块/元数据读 04，改 API/SSE/错误码/分页读 05，改数据库 schema/迁移读 09，改目录结构/代码组织读 10，改 Prompt 管理读 08，改评测数据集读 07，总体架构与不可妥协原则读 00。规范正文不在本文件内，唯一事实源在仓库 docs/private-knowledge-rag/，本 skill 只做导航。
+description: LRLLM 私有知识库 RAG 项目的规范入口。当需要改动或理解本项目任何行为之前，应先加载本 skill 再按任务打开对应规范：改检索/召回/融合/重排/参数读 06，改入库/解析/切块/元数据读 04，改 API/SSE/错误码/分页读 05，改数据库 schema/迁移读 09，改目录结构/代码组织读 10，改 Prompt 管理读 08，改评测数据集读 07，改 LLM Wiki（知识沉淀 / 版本化页面 / 并入混合检索）读 11，总体架构与不可妥协原则读 00。规范正文不在本文件内，唯一事实源在仓库 docs/private-knowledge-rag/，本 skill 只做导航。
 ---
 
 # Private Knowledge RAG — 规范入口
@@ -31,6 +31,7 @@ description: LRLLM 私有知识库 RAG 项目的规范入口。当需要改动�
 | Prompt 管理（存库 / 版本化 / 热修改 / 结构化输出重试） | `docs/private-knowledge-rag/08-prompt-spec.md` |
 | 数据库 schema、DDL、增量迁移 | `docs/private-knowledge-rag/09-database-schema.md` |
 | 目录结构、代码组织、依赖方向、关键归属 | `docs/private-knowledge-rag/10-project-structure.md` |
+| LLM Wiki（知识沉淀 / 版本化页面 / 并入混合检索） | `docs/private-knowledge-rag/11-llm-wiki-spec.md` |
 
 ## 使用规则
 

@@ -33,6 +33,10 @@ CREATE TYPE message_role AS ENUM (
     'USER', 'ASSISTANT', 'SYSTEM'
 );
 
+CREATE TYPE wiki_status AS ENUM (
+    'draft', 'published', 'archived'
+);
+
 -- 4. Core tables
 CREATE TABLE knowledge_bases (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -67,7 +71,9 @@ CREATE TABLE documents (
     error_message          TEXT,
     created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
-    deleted_at             TIMESTAMPTZ
+    deleted_at             TIMESTAMPTZ,
+    source_type            TEXT NOT NULL DEFAULT 'document',  -- 'document' | 'wiki'（11 3.3 影子 document）
+    wiki_page_id           UUID                               -- 影子 document 回指 wiki_pages(id)，无 FK（项目惯例）
 );
 
 -- Only one live Document per identical content within a knowledge base
@@ -81,6 +87,10 @@ CREATE INDEX idx_documents_kb_status
 
 CREATE INDEX idx_documents_product_version
     ON documents (knowledge_base_id, product, version)
+    WHERE deleted_at IS NULL;
+
+CREATE INDEX idx_documents_wiki_page
+    ON documents (wiki_page_id)
     WHERE deleted_at IS NULL;
 
 CREATE TABLE sections (
@@ -268,5 +278,44 @@ CREATE TABLE prompt_templates (
 CREATE UNIQUE INDEX uq_prompt_published
     ON prompt_templates (key)
     WHERE status = 'PUBLISHED';
+
+-- 10. LLM Wiki (11-llm-wiki-spec section 3)
+CREATE TABLE wiki_pages (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    knowledge_base_id UUID NOT NULL,
+    slug            TEXT NOT NULL,
+    title           TEXT NOT NULL,
+    summary         TEXT NOT NULL DEFAULT '',
+    status          wiki_status NOT NULL DEFAULT 'published',
+    revision_count  INT NOT NULL DEFAULT 0,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    deleted_at      TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX uq_wiki_page_slug
+    ON wiki_pages (knowledge_base_id, slug)
+    WHERE deleted_at IS NULL;
+
+CREATE INDEX idx_wiki_pages_kb
+    ON wiki_pages (knowledge_base_id, updated_at DESC)
+    WHERE deleted_at IS NULL;
+
+CREATE TABLE wiki_revisions (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    page_id          UUID NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
+    version          INT NOT NULL,
+    content          TEXT NOT NULL,
+    source_answer_id UUID,
+    source_query     TEXT NOT NULL DEFAULT '',
+    evidence         JSONB NOT NULL DEFAULT '[]',  -- selected_chunks 快照（来源追溯）
+    change_note      TEXT NOT NULL DEFAULT '',
+    status           wiki_status NOT NULL DEFAULT 'published',
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (page_id, version)
+);
+
+CREATE INDEX idx_wiki_revisions_page
+    ON wiki_revisions (page_id, version DESC);
 
 COMMIT;

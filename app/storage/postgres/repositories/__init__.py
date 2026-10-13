@@ -9,6 +9,10 @@ from app.storage.postgres.repositories.knowledge_base import KnowledgeBaseReposi
 from app.storage.postgres.repositories.prompt_template import PromptTemplateRepository
 from app.storage.postgres.repositories.query_trace import QueryTraceRepository
 from app.storage.postgres.repositories.section import SectionRepository
+from app.storage.postgres.repositories.wiki import (
+    WikiPageRepository,
+    WikiRevisionRepository,
+)
 
 __all__ = [
     "ChunkRepository",
@@ -19,5 +23,7 @@ __all__ = [
     "PromptTemplateRepository",
     "QueryTraceRepository",
     "SectionRepository",
+    "WikiPageRepository",
+    "WikiRevisionRepository",
     "_apply_cursor",
 ]

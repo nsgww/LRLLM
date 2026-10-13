@@ -89,7 +89,9 @@ async def _search(
         version=version,
     )
     sub_query = SubQuery(id="agent", query=query, product=product, version=version)
-    filters = build_metadata_filter(knowledge_base_id, understanding, sub_query)
+    filters = build_metadata_filter(
+        knowledge_base_id, understanding, sub_query, include_wiki=settings.wiki_in_retrieval
+    )
     strategy = _strategy(settings, settings.top_k_vector, settings.top_k_keyword)
 
     result = await hybrid.retrieve(query, filters, strategy)

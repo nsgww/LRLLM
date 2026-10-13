@@ -23,7 +23,8 @@ SELECT c.id::text AS chunk_id,
        c.document_id::text AS document_id,
        ts_rank(c.search_tsv, q) AS score,
        c.product, c.version, c.chunk_type::text AS chunk_type,
-       c.heading_path
+       c.heading_path,
+       d.source_type, d.wiki_page_id::text AS wiki_page_id
 FROM chunks c
 JOIN documents d ON d.id = c.document_id
      AND d.deleted_at IS NULL
@@ -35,6 +36,7 @@ WHERE c.deleted_at IS NULL
   AND (:product IS NULL OR c.product = :product)
   AND (:version IS NULL OR c.version = :version)
   AND (:doc_class IS NULL OR d.doc_class = :doc_class)
+  AND (:include_wiki OR d.source_type <> 'wiki')
   AND q @@ c.search_tsv
 ORDER BY score DESC
 LIMIT :top_k
@@ -45,7 +47,8 @@ SELECT c.id::text AS chunk_id,
        c.document_id::text AS document_id,
        similarity(c.text, :query) AS score,
        c.product, c.version, c.chunk_type::text AS chunk_type,
-       c.heading_path
+       c.heading_path,
+       d.source_type, d.wiki_page_id::text AS wiki_page_id
 FROM chunks c
 JOIN documents d ON d.id = c.document_id
      AND d.deleted_at IS NULL
@@ -56,6 +59,7 @@ WHERE c.deleted_at IS NULL
   AND (:product IS NULL OR c.product = :product)
   AND (:version IS NULL OR c.version = :version)
   AND (:doc_class IS NULL OR d.doc_class = :doc_class)
+  AND (:include_wiki OR d.source_type <> 'wiki')
   AND (c.text % :query OR c.heading_path % :query)
 ORDER BY score DESC
 LIMIT :top_k
@@ -87,6 +91,7 @@ class PostgresKeywordStore:
             "product": filters.product,
             "version": filters.version,
             "doc_class": filters.doc_class,
+            "include_wiki": filters.include_wiki,
             "top_k": top_k,
         }
         async with self._session_factory() as session:
@@ -105,6 +110,8 @@ class PostgresKeywordStore:
                     "version": r["version"],
                     "chunk_type": r["chunk_type"],
                     "heading_path": r["heading_path"],
+                    "source_type": r["source_type"],
+                    "wiki_page_id": r["wiki_page_id"],
                 },
             )
             for r in rows

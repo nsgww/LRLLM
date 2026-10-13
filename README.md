@@ -25,6 +25,7 @@ psql -d rag -f scripts/migrate_0.2.0.sql
 psql -d rag -f scripts/migrate_0.3.0.sql
 psql -d rag -f scripts/migrate_0.4.0.sql
 psql -d rag -f scripts/migrate_0.5.0.sql   # content->BYTEA、parent_chunk_id 级联删除
+psql -d rag -f scripts/migrate_0.6.0.sql   # LLM Wiki：wiki_pages/wiki_revisions + documents 影子标记
 
 # 3. 配置环境
 copy .env.example .env   # 填入 LLM / Embedding 的 key 与 model
@@ -103,14 +104,15 @@ app/
 │   ├── document|section|chunk/    # 入库侧：文档、章节、切块
 │   ├── ingestion/                 # AST 块、Job 状态
 │   ├── query/                     # Intent、QueryUnderstanding、SubQuery
-│   └── retrieval/                 # MetadataFilter / RetrievalHit / RankedChunk / EvidenceResult
+│   ├── retrieval/                 # MetadataFilter / RetrievalHit / RankedChunk / EvidenceResult
+│   └── wiki/                      # WikiPage / WikiRevision / WikiSourceRef（11-llm-wiki-spec）
 ├── api/                     # HTTP 层（只做协议转换）
 │   ├── deps.py              #   依赖注入：从 X-Knowledge-Base-ID 头解析作用域
 │   ├── pagination.py        #   Cursor 分页编解码（05 号文档 12 节）
 │   ├── schemas.py           #   请求 / 响应模型
 │   └── routers/             #   knowledge_bases / documents / ingestion_jobs /
 │                            #   query（SSE 流式）/ agent（SSE 自主决策）/
-│                            #   answers / conversations
+│                            #   answers / conversations / wiki（LLM Wiki）
 ├── agent/                   # Agent 自主决策路径（/v1/agent）
 │   ├── adapters.py          #   LangChain 适配（可缺失，降级时 agent 返回 503）
 │   └── runner.py            #   ReAct 决策循环：工具调用、收敛控制、会话接续、答案落库
@@ -120,6 +122,7 @@ app/
 │   ├── query_service.py     #   查询主链路编排（02 号文档全流程）；会话归属校验
 │   ├── cleanup_service.py   #   软删除物理清理与孤儿向量对账（09 号文档 11 节）
 │   ├── conversation_service.py
+│   ├── wiki_service.py      #   LLM Wiki：distill（抽取→归并→版本）+ 影子 document 入库检索块
 │   └── queue.py             #   Redis 任务队列客户端（Worker 快速通道）
 ├── ingestion/               # 入库管线实现（04 号文档）
 │   ├── parsers/             #   Markdown / HTML / PDF → 统一 AST，按内容嗅探路由（04 节 23）
@@ -210,7 +213,7 @@ npm run typecheck      # tsc --noEmit
 
 ```text
 tests/
-├── unit/                  # 19 个测试文件（pytest，不依赖外部服务，约 170 用例）
+├── unit/                  # 20 个测试文件（pytest，不依赖外部服务，约 179 用例）
 │                          #   解析 / 切块 / 元数据 / RRF / Context / 结构化输出解析 /
 │                          #   边界 / 安全（SSRF、越权）/ 分页 / Agent 循环 / Trace
 └── eval/                  # 评测资产（07 号文档，非 pytest，人工评估流程）
@@ -234,6 +237,10 @@ tests/
 （top_k / rrf_k / per_version_cap 等）只能通过配置调整，代码内无硬编码。
 `get_settings()` 进程内缓存，避免每请求重复读取 `.env`。
 
+LLM Wiki 相关：`RAG_WIKI_ENABLED`（总开关，关闭时 wiki 端点 503、自动沉淀停）、
+`RAG_WIKI_IN_RETRIEVAL`（混合检索是否并入 wiki 检索块）、`RAG_WIKI_MAX_CONTENT_TOKENS`、
+`RAG_WIKI_AUTO_MIN_EVIDENCE`（自动沉淀所需最少证据条数）。
+
 ## API 摘要
 
 - `POST /v1/query` — 提问，SSE 流式返回（meta → delta → evidence_status → done）；
@@ -245,6 +252,10 @@ tests/
   均按当前 KB 校验归属；reindex 已有在进行中的任务时复用，不重复入队
 - `GET /v1/ingestion-jobs/{id}` — 入库进度与分阶段错误
 - `GET /v1/answers/{answer_id}/evidence` — 回答的证据引用（须属于当前 KB）
+- `GET /v1/wiki/pages` / `GET /v1/wiki/pages/{id}` — LLM Wiki 页面列表 / 详情（含版本历史，须属于当前 KB）
+- `POST /v1/wiki/answers/{answer_id}/distill` — 把某个回答沉淀/整理进 wiki（仅 SUPPORTED/PARTIALLY_SUPPORTED）
+- `DELETE /v1/wiki/pages/{id}` — 软删 wiki 页面及其检索块
+- LLM Wiki： grounded 问答自动沉淀为版本化页面，并以"影子 document"参与混合检索（11-llm-wiki-spec）
 - 列表接口（knowledge-bases / documents / ingestion-jobs / conversations messages）统一
   Cursor 分页，返回 `{ items, next_cursor, has_more }`；`ingestion-jobs` 支持 `?status=`；
   列表 `limit` 上限 200
