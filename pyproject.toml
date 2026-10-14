@@ -22,6 +22,8 @@ dependencies = [
     # 未安装时 /v1/query 等既有管道不受影响（见 app/agent/runner.py）。
     "langchain-core>=0.3",
     "langchain-openai>=0.2",
+    # LangGraph 编排层（12 §2.2）：StateGraph + MemorySaver checkpoint；app/agent/graph.py。
+    "langgraph>=1.2",
 ]
 
 [project.optional-dependencies]

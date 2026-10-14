@@ -118,7 +118,8 @@ app/
 │                            #   answers / conversations / wiki（LLM Wiki）
 ├── agent/                   # Agent 自主决策路径（/v1/agent）
 │   ├── adapters.py          #   LangChain 适配（可缺失，降级时 agent 返回 503）
-│   └── runner.py            #   ReAct 决策循环：工具调用、收敛控制、会话接续、答案落库
+│   ├── runner.py            #   手写 ReAct 决策循环：工具调用、收敛控制、会话接续、答案落库
+│   └── graph.py             #   LangGraph 编排层（12 §2.2）：StateGraph + MemorySaver checkpoint
 ├── services/                # 业务编排
 │   ├── knowledge_base_service.py
 │   ├── ingestion_service.py #   上传 / 重建索引：建 Job，不写向量；reindex 去重；KB 归属校验

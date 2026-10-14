@@ -76,7 +76,7 @@ description: 企业级 Agent 平台目标架构（接入 / 编排 / 工具 / 策
 |---|---|---|
 | P1 安全刚需 | Policy Engine + 身份主体 + Audit 表与写入点 + 工具风险分级 + Business Tool 门控 | 本轮实现 |
 | P2 可观测 | Metrics `/metrics` + 结构化 Trace/Audit 贯穿 | 本轮实现（Metrics） |
-| P3 编排升级 | LangGraph 集成，Checkpoint=PG，Approval=interrupt+恢复，合并自主路径 | 后续（需 `langgraph` 依赖 + 迁移 runner） |
+| P3 编排升级 | LangGraph 编排层（`app/agent/graph.py`：StateGraph + MemorySaver checkpoint + 条件路由 + 工具门控）已落地并测试；端点切换、PostgresSaver、interrupt/resume 人审、合并自主路径 | 核心已实现；端点切换/PG checkpoint/人审为后续 |
 | P4 接入扩展 | 异步 Job / 定时 / 事件 webhook 统一 Trigger 抽象 | 后续 |
 | P5 | Eval 自动化 + State Store 归一 | 后续 |
 
