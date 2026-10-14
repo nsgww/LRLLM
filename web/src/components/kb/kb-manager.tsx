@@ -57,6 +57,7 @@ export function KbManager() {
   const {
     documents,
     loading,
+    error,
     hasMore,
     loadMore,
     upload,
@@ -152,6 +153,7 @@ export function KbManager() {
             <DocumentTable
               documents={documents}
               loading={loading}
+              error={error}
               hasMore={hasMore}
               busyId={busyId}
               onLoadMore={loadMore}

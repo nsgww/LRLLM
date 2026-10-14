@@ -296,14 +296,27 @@ class QueryService:
         per-sub-query Trace grouping in 06 section 9 is preserved.
         """
         seen: dict[str, float] = {}
+        owner: dict[str, int] = {}  # cid -> 已收录它的批次下标
         batches: list[tuple[str, str, list[tuple[str, float]]]] = []
-        for (sq, _filters), result in zip(planned, retrieval_results, strict=True):
+        for batch_idx, ((sq, _filters), result) in enumerate(
+            zip(planned, retrieval_results, strict=True)
+        ):
             unique: list[tuple[str, float]] = []
             for cid, score in result.candidates:
                 best = seen.get(cid)
                 if best is not None and best >= score:
                     continue
+                # 后续子查询拿到更高分：从旧批次移除低分版本，保证每个
+                # chunk 只送一次重排（与 docstring 契约一致）。
+                prev = owner.get(cid)
+                if prev is not None:
+                    batches[prev] = (
+                        batches[prev][0],
+                        batches[prev][1],
+                        [(c, s) for c, s in batches[prev][2] if c != cid],
+                    )
                 seen[cid] = score
+                owner[cid] = batch_idx
                 unique.append((cid, score))
             batches.append((sq.id, sq.query, unique))
         return batches

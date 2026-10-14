@@ -27,6 +27,7 @@ SELECT c.id::text AS chunk_id,
        d.source_type, d.wiki_page_id::text AS wiki_page_id
 FROM chunks c
 JOIN documents d ON d.id = c.document_id
+     AND d.knowledge_base_id = c.knowledge_base_id
      AND d.deleted_at IS NULL
      AND d.status = 'READY',
      plainto_tsquery('simple', :query) q
@@ -51,6 +52,7 @@ SELECT c.id::text AS chunk_id,
        d.source_type, d.wiki_page_id::text AS wiki_page_id
 FROM chunks c
 JOIN documents d ON d.id = c.document_id
+     AND d.knowledge_base_id = c.knowledge_base_id
      AND d.deleted_at IS NULL
      AND d.status = 'READY'
 WHERE c.deleted_at IS NULL

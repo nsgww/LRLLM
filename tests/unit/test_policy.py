@@ -54,14 +54,15 @@ def test_medium_allowed_without_approval():
     assert d.requires_approval is False
 
 
-def test_tool_requires_approval_non_admin_flags_approval():
+def test_tool_requires_approval_non_admin_blocks_until_approved():
+    """requires_approval 未获批 = 不允许直接执行（闸口转 APPROVAL_REQUIRED 反馈）。"""
     d = _eval(
         Settings(),
         Subject("a", ("user",)),
         tool_risk="low",
         tool_requires_approval=True,
     )
-    assert d.allowed is True
+    assert d.allowed is False
     assert d.requires_approval is True
 
 

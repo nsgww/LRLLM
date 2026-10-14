@@ -41,6 +41,7 @@ from app.core.config import Settings
 from app.core.errors import AppError, QueryStage
 from app.core.ids import assert_same_kb
 from app.llm.factory import LangChainUnavailableError, build_chat_model
+from app.policy.models import Subject
 from app.retrieval.hybrid import HybridRetriever
 from app.retrieval.rerank import RerankService
 from app.storage.postgres.repositories import ConversationRepository
@@ -112,6 +113,7 @@ class AgentRunner:
         knowledge_base_id: str,
         query: str,
         conversation_id: str | None = None,
+        subject: Subject | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """执行一次 Agent 对话，逐个产出事件。
 
@@ -145,7 +147,7 @@ class AgentRunner:
             loop = self._graph_loop if self._settings.agent_use_graph else self._loop
             interrupted = False
             async for event in loop(
-                knowledge_base_id, query, conversation_context, trace, answer_id, started
+                knowledge_base_id, query, conversation_context, trace, answer_id, started, subject
             ):
                 if event.event == "approval_required":
                     # Approval 挂起：透传事件，等待 resume；不落库、不发 done。
@@ -200,6 +202,7 @@ class AgentRunner:
         trace: QueryTraceBuilder,
         answer_id: str,
         started: float,
+        subject: Subject | None = None,
     ) -> AsyncIterator[AgentEvent]:
         specs = build_tools(
             knowledge_base_id=knowledge_base_id,
@@ -248,7 +251,7 @@ class AgentRunner:
                     result = f"TOOL_ERROR: 未知工具 {name}。可用：{sorted(tools_by_name)}。"
                     record = ToolCallRecord(tool=name, arguments=arguments, error="unknown_tool")
                 else:
-                    result = await self._invoke(spec, arguments)
+                    result = await self._invoke(spec, arguments, subject=subject, kb_id=knowledge_base_id)
                     record = ToolCallRecord(tool=name, arguments=arguments, result_preview=result[:500])
                 records.append(record)
                 yield AgentEvent(
@@ -286,11 +289,13 @@ class AgentRunner:
         trace: QueryTraceBuilder,
         answer_id: str,
         started: float,
+        subject: Subject | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """LangGraph 编排分支（12 §2.2，RAG_AGENT_USE_GRAPH=true）。
 
         用 StateGraph 驱动决策循环，事件契约与 _loop 一致（meta/tool_call/delta；
-        done 由 run 统一产出）。Approval 挂起透传 approval_required 后交 run 中止。
+        done 由 run 统一产出）。SSE 路径无 resume 闭环，高风险工具用 reject 模式
+        （直接拒绝执行并反馈），不留挂起态；审批闭环接入后切回 interrupt 模式。
         """
         from app.agent.graph import build_agent_graph, run_graph_events
 
@@ -309,6 +314,13 @@ class AgentRunner:
             model_with_tools=model_with_tools,
             tools_by_name={s.name: s for s in specs},
             max_iterations=budget,
+            approval_mode="reject",
+            policy_ctx={
+                "settings": self._settings,
+                "session_factory": self._session_factory,
+                "subject": subject,
+                "kb_id": knowledge_base_id,
+            },
         )
         steps: list[dict] = []
         streamed: list[str] = []
@@ -320,6 +332,8 @@ class AgentRunner:
             tools=specs,
             max_iterations=budget,
             conversation_context=conversation_context,
+            system_prompt=self._render_system(specs),
+            subject_is_admin=bool(subject and subject.is_admin),
         ):
             if ev.event == "meta":
                 yield ev
@@ -364,18 +378,24 @@ class AgentRunner:
 
         return to_langchain_tools(specs)
 
-    async def _invoke(self, spec: ToolSpec, arguments: dict[str, Any]) -> str:
-        """调用工具并按 schema 过滤参数，避免 LLM 传多余字段导致 TypeError。"""
-        allowed = set(spec.parameters.get("properties", {}))
-        kwargs = {k: v for k, v in arguments.items() if k in allowed}
-        try:
-            return await spec.handler(**kwargs)
-        except TypeError:
-            # 参数不合规：反馈给 LLM 让它重试，而不是中断
-            return f"TOOL_ERROR: 参数不合规，允许的参数为 {sorted(allowed)}。"
-        except Exception as exc:
-            logger.warning("agent tool %s raised", spec.name, exc_info=True)
-            return f"TOOL_ERROR: {type(exc).__name__}"
+    async def _invoke(
+        self,
+        spec: ToolSpec,
+        arguments: dict[str, Any],
+        subject: Subject | None = None,
+        kb_id: str | None = None,
+    ) -> str:
+        """统一执行闸口（12 §2.3）：Policy 评估 → 审计 → 拒绝或执行。"""
+        from app.tools.gate import execute_with_policy
+
+        return await execute_with_policy(
+            spec=spec,
+            arguments=arguments,
+            settings=self._settings,
+            session_factory=self._session_factory,
+            subject=subject,
+            kb_id=kb_id,
+        )
 
     async def _stream_final(
         self, messages: list[Any], final_text: str

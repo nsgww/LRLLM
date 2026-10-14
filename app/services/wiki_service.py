@@ -14,6 +14,7 @@ import json
 import logging
 from dataclasses import dataclass
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
@@ -162,15 +163,22 @@ class WikiService:
                 summary = merged.summary or page.summary
                 content = merged.content
                 version = await revisions.next_version(str(page.id))
-                await revisions.create(
-                    WikiRevision(
-                        page_id=str(page.id),
-                        version=version,
-                        content=content,
-                        source=source,
-                        change_note=f"增补自 answer {answer_id}",
+                try:
+                    await revisions.create(
+                        WikiRevision(
+                            page_id=str(page.id),
+                            version=version,
+                            content=content,
+                            source=source,
+                            change_note=f"增补自 answer {answer_id}",
+                        )
                     )
-                )
+                except IntegrityError as exc:
+                    raise AppError(
+                        code="WIKI_CONFLICT",
+                        message="concurrent distill on the same page; retry",
+                        http_status=409,
+                    ) from exc
                 await pages.touch(
                     str(page.id), title=title, summary=summary, revision_count=version
                 )
@@ -187,16 +195,24 @@ class WikiService:
                 )
 
             # Brand-new page
-            page_row = await pages.create(
-                WikiPage(
-                    knowledge_base_id=real_kb,
-                    slug=slug,
-                    title=out.title or slug,
-                    summary=out.summary,
-                    status=WikiStatus.PUBLISHED,
-                    revision_count=1,
+            try:
+                page_row = await pages.create(
+                    WikiPage(
+                        knowledge_base_id=real_kb,
+                        slug=slug,
+                        title=out.title or slug,
+                        summary=out.summary,
+                        status=WikiStatus.PUBLISHED,
+                        revision_count=1,
+                    )
                 )
-            )
+            except IntegrityError as exc:
+                # 并发 distill 同 slug：唯一约束冲突收敛为 409（可重试）。
+                raise AppError(
+                    code="WIKI_CONFLICT",
+                    message="concurrent distill created the same page; retry",
+                    http_status=409,
+                ) from exc
             page_id = str(page_row.id)
             await revisions.create(
                 WikiRevision(
@@ -394,14 +410,24 @@ class WikiService:
             documents = DocumentRepository(session)
             chunks = ChunkRepository(session)
             shadow = await documents.get_by_wiki_page(str(page.knowledge_base_id), page_id)
+            orphan_chunk_ids: list[str] = []
             if shadow is not None:
-                ids = await chunks.list_ids_by_document(str(shadow.id))
-                if ids:
-                    await self._vector_store.delete(ids)
+                orphan_chunk_ids = await chunks.list_ids_by_document(str(shadow.id))
                 await chunks.soft_delete_by_document(str(shadow.id))
                 await documents.soft_delete(str(shadow.id))
             await pages.soft_delete(page_id)
+            # 先 commit 后动向量（与 _index_db/_apply_vectors 同一不变量）：
+            # commit 回滚时旧内容向量不受影响，避免"有行无向量"的静默不可召回。
             await session.commit()
+            if orphan_chunk_ids:
+                try:
+                    await self._vector_store.delete(orphan_chunk_ids)
+                except Exception:
+                    logger.warning(
+                        "wiki page %s vector cleanup failed; reconcile will retry",
+                        page_id,
+                        exc_info=True,
+                    )
 
     @staticmethod
     def _extraction_error(prefix: str, exc: AppError) -> AppError:

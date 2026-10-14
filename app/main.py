@@ -11,10 +11,11 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import sqlalchemy as sa
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app.agent.runner import AgentRunner
+from app.api.deps import require_api_key
 from app.api.routers import (
     agent,
     answers,
@@ -198,19 +199,29 @@ def create_app() -> FastAPI:
     # 12 §2.4/§2.5：策略引擎装配到 app.state，供业务工具 / 编排门控复用。
     app.state.policy_engine = PolicyEngine(settings)
 
-    @app.get("/metrics")
+    @app.get("/metrics", dependencies=[Depends(require_api_key)])
     async def metrics_endpoint() -> PlainTextResponse:
-        # Prometheus 文本（12 §2.5）；轻量计数器，零第三方依赖。
+        # Prometheus 文本（12 §2.5）；鉴权跟随 /v1（未配置 API key 时 no-op），
+        # 防止拒绝计数/端点信息被匿名抓取。
         return PlainTextResponse(get_metrics().render(), media_type="text/plain")
 
     @app.middleware("http")
     async def request_id_middleware(request: Request, call_next):
         request.state.request_id = f"req_{uuid.uuid4().hex[:16]}"
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception:
+            # 异常路径也要计数（5xx 不在指标里隐形）；X-Request-ID 由兜底
+            # exception handler 补齐（05 §2）。
+            get_metrics().inc(
+                "http_requests_total", {"path": "unmatched", "status": "500"}
+            )
+            raise
         response.headers["X-Request-ID"] = request.state.request_id
-        # 12 §2.5：HTTP 请求计数（path 用路由模板归一，避免高基数 label 爆炸）。
+        # 12 §2.5：HTTP 请求计数。未匹配路由**不得**用原始 path 作 label——
+        # 否则任意 GET /<随机串> 都能注入新 label，撑爆基数（内存 DoS）。
         route = request.scope.get("route")
-        path = getattr(route, "path", request.url.path)
+        path = getattr(route, "path", None) or "unmatched"
         get_metrics().inc(
             "http_requests_total",
             {"path": path, "status": str(response.status_code)},

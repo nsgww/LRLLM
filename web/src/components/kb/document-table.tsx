@@ -50,6 +50,7 @@ function StatusBadge({ status }: { status: string }) {
 interface DocumentTableProps {
   documents: DocumentItem[];
   loading: boolean;
+  error?: string | null;
   hasMore: boolean;
   busyId: string | null;
   onLoadMore: () => void;
@@ -60,6 +61,7 @@ interface DocumentTableProps {
 export function DocumentTable({
   documents,
   loading,
+  error,
   hasMore,
   busyId,
   onLoadMore,
@@ -68,6 +70,15 @@ export function DocumentTable({
 }: DocumentTableProps) {
   const [confirmId, setConfirmId] = React.useState<string | null>(null);
   const [actionError, setActionError] = React.useState<string | null>(null);
+
+  // 加载失败必须可见：吞成空态会误导用户以为没有文档而重复上传。
+  if (error) {
+    return (
+      <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+        文档加载失败：{error}
+      </p>
+    );
+  }
 
   if (!loading && documents.length === 0) {
     return (

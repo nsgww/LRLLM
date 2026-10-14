@@ -43,11 +43,14 @@ class PolicyEngine:
                     reason="high-risk action denied by policy",
                 )
 
-        # 工具显式要求审批且非 admin：允许发起但需审批后执行。
+        # 工具显式要求审批且非 admin：未获批的动作**不允许直接执行**，
+        # 由执行闸口转成 APPROVAL_REQUIRED 文本反馈给 LLM（12 §2.3/§4）。
         needs_approval = bool(tool_requires_approval) and not subject.is_admin
-        return Decision(
-            allowed=True,
-            risk=risk,
-            requires_approval=needs_approval,
-            reason="",
-        )
+        if needs_approval:
+            return Decision(
+                allowed=False,
+                risk=risk,
+                requires_approval=True,
+                reason="requires approval before execution",
+            )
+        return Decision(allowed=True, risk=risk, requires_approval=False, reason="")

@@ -28,10 +28,11 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
 from app.agent.runner import AgentEvent
-from app.api.deps import require_api_key, require_kb_id
+from app.api.deps import require_api_key, require_kb_id, require_subject
 from app.api.schemas import AgentRequest
 from app.core.config import get_settings
 from app.core.errors import AppError
+from app.policy.models import Subject
 
 router = APIRouter(tags=["agent"], dependencies=[Depends(require_api_key)])
 
@@ -52,6 +53,7 @@ async def agent(
     body: AgentRequest,
     request: Request,
     kb_id: str = Depends(require_kb_id),
+    subject: Subject = Depends(require_subject),
 ) -> StreamingResponse:
     settings = get_settings()
     await request.app.state.kb_service.get(kb_id)  # 404 when missing/deleted
@@ -94,7 +96,7 @@ async def agent(
         # shield: a heartbeat timeout must not cancel the in-flight __anext__
         # (doing so closes the async generator and truncates the stream).
         try:
-            iterator = runner.run(kb_id, body.query, body.conversation_id).__aiter__()
+            iterator = runner.run(kb_id, body.query, body.conversation_id, subject=subject).__aiter__()
             pending: asyncio.Task | None = None
             while True:
                 if pending is None:

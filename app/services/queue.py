@@ -69,23 +69,30 @@ class EventQueue:
     （触发对应 Job / Agent）作为后续接入。
     """
 
-    def __init__(self, redis_url: str, enabled: bool = True) -> None:
+    def __init__(self, redis_url: str, enabled: bool = True, maxlen: int = 10000) -> None:
         self._enabled = enabled
         self._client = redis.from_url(redis_url) if enabled else None
         self._broken = False
+        # 无消费端时防 Redis 无界增长：只保留最近 maxlen 条。
+        self._maxlen = maxlen
 
     @property
     def usable(self) -> bool:
         return self._client is not None and not self._broken
 
-    async def enqueue(self, payload: str) -> None:
+    async def enqueue(self, payload: str) -> bool:
+        """入队并返回是否成功；失败静默降级（调用方据此决定是否拒收）。"""
         if self._client is None or self._broken:
-            return
+            return False
         try:
             await self._client.rpush(EVENT_QUEUE_KEY, payload)
+            if self._maxlen and self._maxlen > 0:
+                await self._client.ltrim(EVENT_QUEUE_KEY, -self._maxlen, -1)
+            return True
         except Exception as exc:
             logger.warning("redis event enqueue failed: %s", exc)
             self._broken = True
+            return False
 
     async def dequeue(self, timeout: float) -> str | None:
         if self._client is None or self._broken:

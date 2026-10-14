@@ -109,6 +109,8 @@ class RerankService:
                     raise ValueError(
                         f"reranker dropped candidates: {len(unique)} < {expected}"
                     )
+                # 重排分支同样按 top_n 截断：provider 忽略 top_k 时防止候选全量下漏
+                # （回退分支 131 行已有同样截断）。
                 return RerankOutcome(
                     chunks=[
                         _to_ranked(
@@ -117,7 +119,7 @@ class RerankService:
                             sub_query_id,
                             parent_text_by_id,
                         )
-                        for r in unique
+                        for r in unique[: self._settings.rerank_top_n]
                     ]
                 )
             except Exception:

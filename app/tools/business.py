@@ -1,15 +1,16 @@
 """Business Tools 示例（12-agent-platform-spec §2.3）。
 
-连"内部系统"的工具是风险敞口，执行前经 ``make_guarded_handler`` 过
+连"内部系统"的工具是风险敞口：handler 一律经 ``execute_with_policy`` 过
 Policy + Audit。把 ``_internal_lookup`` / ``_internal_provision`` 换成真实
 内部 API / 数据库调用即可，门控骨架不变。
 
-- ``internal_lookup``：只读内部查询，medium 风险，放行。
-- ``internal_provision``：业务系统写操作，high 风险 + 需审批；非 admin
-  默认返回 APPROVAL_REQUIRED / POLICY_DENIED 且不执行。
+装配方式：先声明 ToolSpec（handler=真实函数），再用 ``make_guarded_handler``
+生成包闸口的 handler——闸口最终调用的是 spec.handler（真实函数），无循环。
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -36,51 +37,55 @@ def build_business_tools(
     subject: Subject,
 ) -> list[ToolSpec]:
     """构造带 Policy 门控的业务工具集（按身份主体生效）。"""
-    lookup = make_guarded_handler(
-        session_factory=session_factory,
-        settings=settings,
-        subject=subject,
+    lookup_spec = ToolSpec(
         name="internal_lookup",
-        resource_type="internal_api",
-        risk="medium",
-        requires_approval=False,
-        fn=_internal_lookup,
+        description="查询内部系统数据（只读，medium 风险，直接放行）。",
+        parameters={
+            "type": "object",
+            "properties": {"key": {"type": "string", "description": "查询键"}},
+            "required": ["key"],
+        },
+        handler=_internal_lookup,
+        risk_level="medium",
     )
-    provision = make_guarded_handler(
-        session_factory=session_factory,
-        settings=settings,
-        subject=subject,
+    provision_spec = ToolSpec(
         name="internal_provision",
-        resource_type="business_system",
-        risk="high",
+        description="对业务系统执行 provisioning 写操作（high 风险，需审批）。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "resource": {"type": "string"},
+                "size": {"type": "string"},
+            },
+            "required": ["resource", "size"],
+        },
+        handler=_internal_provision,
+        risk_level="high",
         requires_approval=True,
-        fn=_internal_provision,
     )
+
+    def guarded(spec: ToolSpec) -> Any:
+        return make_guarded_handler(
+            session_factory=session_factory,
+            settings=settings,
+            subject=subject,
+            spec=spec,
+        )
+
     return [
         ToolSpec(
-            name="internal_lookup",
-            description="查询内部系统数据（只读，medium 风险，直接放行）。",
-            parameters={
-                "type": "object",
-                "properties": {"key": {"type": "string", "description": "查询键"}},
-                "required": ["key"],
-            },
-            handler=lookup,
-            risk_level="medium",
+            name=lookup_spec.name,
+            description=lookup_spec.description,
+            parameters=lookup_spec.parameters,
+            handler=guarded(lookup_spec),
+            risk_level=lookup_spec.risk_level,
         ),
         ToolSpec(
-            name="internal_provision",
-            description="对业务系统执行 provisioning 写操作（high 风险，需审批）。",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "resource": {"type": "string"},
-                    "size": {"type": "string"},
-                },
-                "required": ["resource", "size"],
-            },
-            handler=provision,
-            risk_level="high",
+            name=provision_spec.name,
+            description=provision_spec.description,
+            parameters=provision_spec.parameters,
+            handler=guarded(provision_spec),
+            risk_level=provision_spec.risk_level,
             requires_approval=True,
         ),
     ]

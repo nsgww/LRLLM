@@ -56,7 +56,15 @@ class OpenAILLM:
                 stage=QueryStage.LLM_GENERATION,
             ) from exc
         data = response.json()
-        return data["choices"][0]["message"]["content"] or ""
+        try:
+            return data["choices"][0]["message"]["content"] or ""
+        except (KeyError, IndexError, TypeError) as exc:
+            # 200 但响应体不合契约：给明确分类码，而不是裸 KeyError→INTERNAL_ERROR。
+            raise AppError(
+                code="LLM_OUTPUT_INVALID",
+                message=f"unexpected response shape from LLM provider: {exc}",
+                stage=QueryStage.LLM_GENERATION,
+            ) from exc
 
     async def stream(self, messages: list[Message], **kwargs: object) -> AsyncIterator[str]:
         payload = {

@@ -192,6 +192,9 @@ class Settings(BaseSettings):
     agent_timeout_seconds: float = 180.0
     # 编排引擎：False=手写 ReAct(runner._loop，默认，零回归)；True=LangGraph 图(graph.py)
     agent_use_graph: bool = False
+    # 身份头信任开关（12 §2.4）：X-Subject-* 头默认不被信任（客户端可伪造 admin），
+    # 一律视为 api-client/user；仅在可信网关负责鉴权并覆写身份头时开启。
+    trust_subject_headers: bool = False
 
     # llm wiki（11-llm-wiki-spec section 7）：把查询沉淀的知识持续整理成版本化页面
     wiki_enabled: bool = True            # 关闭时 wiki 端点 503、自动沉淀停；不影响 /v1/query

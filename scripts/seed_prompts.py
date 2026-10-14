@@ -31,7 +31,12 @@ async def main() -> None:
 
     async with session_factory() as session:
         repo = PromptTemplateRepository(session)
-        for path in sorted(SEED_DIR.glob("*.md")):
+        seed_files = sorted(SEED_DIR.glob("*.md"))
+        if not seed_files:
+            # 空目录静默通过会让人误以为已灌入：显式报错退出。
+            print(f"ERROR: no seed templates found in {SEED_DIR}")
+            raise SystemExit(1)
+        for path in seed_files:
             key = path.stem
             content = path.read_text(encoding="utf-8")
             variables = sorted(set(_VAR_RE.findall(content)))

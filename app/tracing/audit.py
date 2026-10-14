@@ -31,7 +31,8 @@ async def record_audit(
     *,
     approved_by: str | None = None,
     detail: dict | None = None,
-) -> None:
+) -> bool:
+    """写入审计并返回是否成功；调用方（执行闸口）据此对高风险动作 fail-closed。"""
     try:
         async with session_factory() as session:
             await AuditLogRepository(session).create(
@@ -47,5 +48,7 @@ async def record_audit(
                 detail=detail,
             )
             await session.commit()
+            return True
     except Exception:
         logger.warning("failed to write audit log for %s", action, exc_info=True)
+        return False

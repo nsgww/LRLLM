@@ -21,25 +21,34 @@ export function useDocuments(kbId: string | null) {
   const [hasMore, setHasMore] = React.useState(false);
   const [loadedMore, setLoadedMore] = React.useState(false);
   const [busyId, setBusyId] = React.useState<string | null>(null);
+  // 记录当前 KB：切库后旧请求的响应必须丢弃，否则会把别的知识库的文档写进来。
+  const kbRef = React.useRef(kbId);
+  React.useEffect(() => {
+    kbRef.current = kbId;
+  }, [kbId]);
 
   const load = React.useCallback(
     async (cursor?: string) => {
       if (!kbId) {
         setDocuments([]);
+        setError(null);
         return;
       }
+      const reqKb = kbId;
       setLoading(true);
       setError(null);
       try {
         const page = await listDocuments(kbId, { limit: 50, cursor });
+        if (kbRef.current !== reqKb) return; // 已切换 KB，丢弃过期响应
         setDocuments((prev) => (cursor ? [...prev, ...page.items] : page.items));
         setNextCursor(page.next_cursor);
         setHasMore(page.has_more);
         setLoadedMore(Boolean(cursor));
       } catch (err) {
+        if (kbRef.current !== reqKb) return;
         setError(err instanceof Error ? err.message : "加载文档失败");
       } finally {
-        setLoading(false);
+        if (kbRef.current === reqKb) setLoading(false);
       }
     },
     [kbId],

@@ -37,6 +37,21 @@ class IngestionErrorCode(str, Enum):
     DATABASE_FAILED = "DATABASE_FAILED"
 
 
+class PlatformErrorCode(str, Enum):
+    """Agent 平台层错误码（12-agent-platform-spec §4，单一事实源）。
+
+    - POLICY_DENIED：策略拒绝（API 层 403；工具层以 POLICY_DENIED: 文本反馈 LLM）。
+    - APPROVAL_REQUIRED：高风险动作需审批（工具层文本反馈；审批闭环接入后 202/409）。
+    - EVENT_QUEUE_UNAVAILABLE：事件队列不可用（/v1/events 返回 503，不谎报 queued）。
+    - WIKI_CONFLICT：并发 distill 冲突（409，客户端可重试）。
+    """
+
+    POLICY_DENIED = "POLICY_DENIED"
+    APPROVAL_REQUIRED = "APPROVAL_REQUIRED"
+    EVENT_QUEUE_UNAVAILABLE = "EVENT_QUEUE_UNAVAILABLE"
+    WIKI_CONFLICT = "WIKI_CONFLICT"
+
+
 class AppError(Exception):
     """Structured application error carried to API / Trace."""
 

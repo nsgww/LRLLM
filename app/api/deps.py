@@ -53,9 +53,17 @@ def require_subject(
     x_subject_id: str | None = Header(default=None),
     x_subject_roles: str | None = Header(default=None),
 ) -> Subject:
-    """解析身份主体（12 §2.4）。缺省 anonymous/user；生产可由 API Key 映射覆盖。"""
+    """解析身份主体（12 §2.4）。
+
+    身份头默认**不被信任**（trust_subject_headers=False）：任何客户端都能伪造
+    X-Subject-*，因此默认一律视为 api-client/user；仅当部署在可信网关之后
+    （网关完成鉴权并覆写身份头）时才显式开启 RAG_TRUST_SUBJECT_HEADERS。
+    """
+    settings = get_settings()
+    if not settings.trust_subject_headers:
+        return Subject(id="api-client", roles=("user",))
     subject_id = (x_subject_id or "").strip() or "anonymous"
     roles = tuple(
-        r.strip() for r in (x_subject_roles or "user").split(",") if r.strip()
+        r.strip().lower() for r in (x_subject_roles or "user").split(",") if r.strip()
     )
     return Subject(id=subject_id, roles=roles or ("user",))

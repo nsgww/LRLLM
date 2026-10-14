@@ -44,6 +44,11 @@ function relativeTime(iso?: string | null): string {
 
 export function WikiPanel() {
   const { selectedKbId } = useApp();
+  // 切库后丢弃旧 KB 的过期响应，避免把别的知识库的页面写进当前列表。
+  const kbRef = React.useRef(selectedKbId);
+  React.useEffect(() => {
+    kbRef.current = selectedKbId;
+  }, [selectedKbId]);
   const [pages, setPages] = React.useState<WikiPage[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -56,6 +61,7 @@ export function WikiPanel() {
   const load = React.useCallback(
     async (mode: "reset" | "more") => {
       if (!selectedKbId) return;
+      const reqKb = selectedKbId;
       setLoading(true);
       setError(null);
       try {
@@ -64,15 +70,17 @@ export function WikiPanel() {
           limit: 50,
           cursor: nextCursor ?? undefined,
         });
+        if (kbRef.current !== reqKb) return; // 已切换 KB，丢弃过期响应
         setPages((prev) =>
           mode === "reset" ? page.items : [...prev, ...page.items],
         );
         setHasMore(page.has_more);
         setCursor(page.next_cursor);
       } catch (err) {
+        if (kbRef.current !== reqKb) return;
         setError(err instanceof Error ? err.message : "加载 Wiki 失败");
       } finally {
-        setLoading(false);
+        if (kbRef.current === reqKb) setLoading(false);
       }
     },
     [selectedKbId, cursor],

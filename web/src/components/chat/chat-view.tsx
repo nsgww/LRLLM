@@ -27,7 +27,7 @@ function ThinkingDots() {
 
 export function ChatView() {
   const { selectedKbId, activeConversationId, setView } = useApp();
-  const { messages, send, streaming, loadingHistory, historyError, reloadHistory } =
+  const { messages, send, streaming, loadingHistory, historyError, reloadHistory, stop } =
     useChat();
   const bottomRef = React.useRef<HTMLDivElement>(null);
 

@@ -14,6 +14,11 @@ class _FakeRedis:
         self.q.append(val)
         return len(self.q)
 
+    async def ltrim(self, key, start, end):
+        # 与 Redis 语义一致：保留 [start, end] 区间（负索引从尾部计数）。
+        self.q = self.q[start:] if end == -1 else self.q
+        return True
+
     async def blpop(self, key, timeout):
         if self.q:
             v = self.q.pop(0)

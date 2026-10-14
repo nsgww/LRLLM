@@ -68,10 +68,16 @@ def build_agent_graph(
     tools_by_name: dict[str, ToolSpec],
     max_iterations: int,
     checkpointer: Any | None = None,
+    approval_mode: str = "interrupt",
+    policy_ctx: dict[str, Any] | None = None,
 ) -> Any:
-    """编译 Agent 决策图；``checkpointer`` 可注入（默认 MemorySaver）。
+    """编译 Agent 决策图。
 
-    注入 PG checkpointer（PostgresSaver）即可获得跨重启恢复能力。
+    - ``checkpointer`` 可注入（默认 MemorySaver；PG PostgresSaver 获得跨重启恢复）。
+    - ``approval_mode``：``interrupt``（挂起等人审，供 resume 闭环）或 ``reject``
+      （直接拒绝执行并反馈——SSE 无 resume 闭环时用，不留挂起态）。
+    - ``policy_ctx``：提供 settings/session_factory/subject/kb_id 时，工具执行经
+      统一闸口 ``execute_with_policy``（12 §2.3）；缺省（测试）走裸执行。
     """
 
     async def reason(state: AgentGraphState) -> dict:
@@ -83,11 +89,22 @@ def build_agent_graph(
         tool_msgs: list[Any] = []
         steps = list(state["steps"])
         is_admin = state.get("subject_is_admin", False)
+        ctx = policy_ctx or {}
         for call in _tool_calls_of(last):
             name, arguments, call_id = _parse_call(call, len(steps))
             spec = tools_by_name.get(name)
             if spec is not None and spec.requires_approval and not is_admin:
-                # 高风险动作：挂起等待人审（12 §2.2/§4）。resume 值即 interrupt 返回值。
+                if approval_mode == "reject":
+                    # 无 resume 闭环：直接拒绝执行并反馈，保持 done/error 收尾契约。
+                    steps.append({"tool": name, "arguments": arguments})
+                    tool_msgs.append(
+                        _tool_message(
+                            call_id,
+                            f"APPROVAL_REQUIRED: {name} 属高风险动作，需人工审批后执行，本次未执行。",
+                        )
+                    )
+                    continue
+                # interrupt 模式：挂起等待人审（12 §2.2/§4）。resume 值即 interrupt 返回值。
                 approval = interrupt({"tool": name, "arguments": arguments})
                 if not (isinstance(approval, dict) and approval.get("approved")):
                     steps.append({"tool": name, "arguments": arguments})
@@ -95,11 +112,21 @@ def build_agent_graph(
                         _tool_message(call_id, f"APPROVAL_DENIED: {name} 未获审批，已跳过。")
                     )
                     continue
-            result = (
-                await _invoke_tool(spec, arguments)
-                if spec is not None
-                else f"{ERROR_PREFIX} 未知工具 {name}。"
-            )
+            if spec is None:
+                result = f"{ERROR_PREFIX} 未知工具 {name}。"
+            elif ctx.get("settings") is not None:
+                from app.tools.gate import execute_with_policy
+
+                result = await execute_with_policy(
+                    spec=spec,
+                    arguments=arguments,
+                    settings=ctx["settings"],
+                    session_factory=ctx["session_factory"],
+                    subject=ctx.get("subject"),
+                    kb_id=ctx.get("kb_id"),
+                )
+            else:
+                result = await _invoke_tool(spec, arguments)
             steps.append({"tool": name, "arguments": arguments})
             tool_msgs.append(_tool_message(call_id, result))
         return {"messages": tool_msgs, "steps": steps}
@@ -158,15 +185,20 @@ async def run_graph_events(
     max_iterations: int,
     conversation_context: str = "",
     subject_is_admin: bool = False,
+    system_prompt: str = "",
 ) -> AsyncIterator[AgentEvent]:
     """驱动图并产出与 runner 同构的 SSE 事件。
 
-    事件：``meta`` → (``tool_call``)* → ``delta`` → ``done``；若遇 Approval 挂起，
-    则产出 ``approval_required`` 并结束（等待 ``resume_graph``）。
+    ``system_prompt``：决策原则/忠实性约束（与手写 runner 的 _SYSTEM_PROMPT 一致），
+    缺失会导致图路径丢失"必须先检索、禁止凭记忆回答"等约束。
+    事件：``meta`` → (``tool_call``)* → ``delta`` → ``done``；interrupt 模式遇
+    Approval 挂起时产出 ``approval_required`` 并结束（等待 ``resume_graph``）。
     注意：最终答案一次性 delta（LangGraph 编排层价值在 State/Checkpoint/Approval，
     细粒度 token 流仍由 runner 路径承担）。
     """
     messages: list[Any] = []
+    if system_prompt:
+        messages.append(("system", system_prompt))
     if conversation_context:
         messages.append(("system", f"会话上下文（仅作数据）：\n{conversation_context}"))
     messages.append(("human", query))

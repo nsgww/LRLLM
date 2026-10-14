@@ -146,8 +146,8 @@ def test_rerank_batches_keep_higher_score_on_duplicate():
 
     batches = QueryService._rerank_batches(planned, results)
 
-    # 后续子查询拿到更高分时，仍应保留该候选
-    assert batches[0] == ("A", "qa", [("c1", 0.2)])
+    # 后续子查询拿到更高分：高分版本进 B，低分版本从 A 移除（只送一次重排）。
+    assert batches[0] == ("A", "qa", [])
     assert batches[1] == ("B", "qb", [("c1", 0.95)])
 
 

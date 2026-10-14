@@ -85,8 +85,15 @@ class OpenAIEmbedding:
             )
         except httpx.HTTPError as exc:
             raise AppError(code="EMBEDDING_REQUEST_FAILED", message=str(exc)) from exc
-        data = sorted(response.json()["data"], key=lambda item: item["index"])
-        vectors = [item["embedding"] for item in data]
+        try:
+            data = sorted(response.json()["data"], key=lambda item: item["index"])
+            vectors = [item["embedding"] for item in data]
+        except (KeyError, IndexError, TypeError) as exc:
+            # 200 但响应体不合契约：给明确分类码，而不是裸 KeyError。
+            raise AppError(
+                code="EMBEDDING_OUTPUT_INVALID",
+                message=f"unexpected response shape from embedding provider: {exc}",
+            ) from exc
         for vector in vectors:
             if len(vector) != self._dimension:
                 raise AppError(

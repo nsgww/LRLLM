@@ -303,6 +303,21 @@ GET /v1/conversations/{conversation_id}/messages
 
 Conversation 仅用于 Query Rewrite 的上下文来源，不做复杂 Memory。
 
+## 10.1 Agent 平台层端点（12-agent-platform-spec）
+
+```
+POST /v1/agent                              # SSE 自主工具调用；高风险未审批工具以 APPROVAL_REQUIRED 文本反馈
+POST /v1/wiki/answers/{answer_id}/distill   # 11 §7：RAG_WIKI_ENABLED=false 时全部 wiki 端点 503
+GET  /v1/wiki/pages
+GET  /v1/wiki/pages/{page_id}
+DELETE /v1/wiki/pages/{page_id}
+POST /v1/events                             # 12 §2.1：入站事件；队列不可用/入队失败 → 503 EVENT_QUEUE_UNAVAILABLE
+GET  /metrics                               # 12 §2.5：Prometheus 文本；鉴权跟随 /v1
+```
+
+错误码补充：`POLICY_DENIED`(403/工具层文本)、`APPROVAL_REQUIRED`(工具层文本)、
+`EVENT_QUEUE_UNAVAILABLE`(503)、`WIKI_CONFLICT`(409，并发 distill 可重试)。
+
 ## 11. Retrieval Trace 可见性
 
 - Retrieval Trace 不出现在任何公开 API 响应中。

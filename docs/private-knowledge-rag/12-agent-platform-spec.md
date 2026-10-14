@@ -76,8 +76,8 @@ description: 企业级 Agent 平台目标架构（接入 / 编排 / 工具 / 策
 |---|---|---|
 | P1 安全刚需 | Policy Engine + 身份主体 + Audit 表与写入点 + 工具风险分级 + Business Tool 门控 | 本轮实现 |
 | P2 可观测 | Metrics `/metrics` + 结构化 Trace/Audit 贯穿 | 本轮实现（Metrics） |
-| P3 编排升级 | LangGraph 编排层（`app/agent/graph.py`：StateGraph + MemorySaver checkpoint + 条件路由 + 工具门控 + **Approval interrupt/resume**）已落地；`runner` 支持 `RAG_AGENT_USE_GRAPH` 切换（端点可用图编排，默认手写 runner 零回归）；PostgresSaver、resume 端点、合并自主路径 | 核心+人审+端点开关已实现；PG checkpoint/resume 端点/合并为后续 |
-| P4 接入扩展 | 事件 webhook（`POST /v1/events` + `EventQueue`）已落地；异步 Job/定时复用 + 统一 Trigger 抽象 + 消费端 | 事件入口已实现；消费端/统一 Trigger 为后续 |
+| P3 编排升级 | LangGraph 编排层（StateGraph + MemorySaver checkpoint + 条件路由）已落地；`RAG_AGENT_USE_GRAPH` 可切换；工具执行**全路径经统一闸口**（`execute_with_policy`：Policy 评估→审计→拒绝不执行，高风险审计失败 fail-closed）。SSE 无 resume 闭环时高风险工具用 **reject 模式**（直接拒绝并反馈，保持 done/error 契约）；`interrupt/resume` 保留给审批闭环（需 resume 端点 + 常驻 checkpointer）；PostgresSaver、合并自主路径为后续 | 闸口+reject 已实现；resume 闭环/PG checkpoint/合并为后续 |
+| P4 接入扩展 | 事件 webhook（`POST /v1/events` + `EventQueue`）已落地，**诚实语义**：队列不可用/入队失败返回 503（不谎报 queued），队列 maxlen 截断防无界增长；异步 Job/定时复用 + 统一 Trigger 抽象 + 消费端 + 事件持久化兜底 | 事件入口（拒收式）已实现；消费端/持久化兜底为后续 |
 | P5 | Eval 自动化 + State Store 归一 | 后续 |
 
 ## 4. 错误码
