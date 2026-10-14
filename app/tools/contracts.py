@@ -37,6 +37,9 @@ class ToolSpec:
     # JSON Schema 形态的参数描述（OpenAI function calling 子集）
     parameters: dict[str, Any]
     handler: Callable[..., Awaitable[str]]
+    # 12 §2.3 风险分级与审批要求；执行前经 PolicyEngine 门控并记 Audit。
+    risk_level: str = "low"  # low | medium | high
+    requires_approval: bool = False
 
 
 @dataclass

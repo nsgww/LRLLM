@@ -26,6 +26,7 @@ psql -d rag -f scripts/migrate_0.3.0.sql
 psql -d rag -f scripts/migrate_0.4.0.sql
 psql -d rag -f scripts/migrate_0.5.0.sql   # content->BYTEA、parent_chunk_id 级联删除
 psql -d rag -f scripts/migrate_0.6.0.sql   # LLM Wiki：wiki_pages/wiki_revisions + documents 影子标记
+psql -d rag -f scripts/migrate_0.7.0.sql   # Agent 平台：audit_logs 审计表
 
 # 3. 配置环境
 copy .env.example .env   # 填入 LLM / Embedding 的 key 与 model
@@ -84,6 +85,7 @@ LRLLM/
 | `09-database-schema.md` | 建库契约，DDL 可直接执行（即 `scripts/init_db.sql`） |
 | `10-project-structure.md` | 项目结构与代码组织约定 |
 | `11-llm-wiki-spec.md` | LLM Wiki：grounded 问答沉淀为版本化页面并并入混合检索 |
+| `12-agent-platform-spec.md` | 企业级 Agent 平台：接入/编排(LangGraph)/工具/策略(Policy)/平台服务(Trace·Audit·Metrics) |
 
 ## app/ — 应用代码
 
@@ -154,11 +156,15 @@ app/
 │   │                        #     Conversation / Trace / Prompt（各一模块）
 │   ├── qdrant/store.py      #   向量库：Collection 管理、filter 下推、维度校验、wait=True
 │   └── keyword/store.py     #   关键词检索：FTS（simple）+ pg_trgm 兜底
-├── tracing/query_trace.py   # QueryTrace 构建器，只写 query_traces 表，不对 API 暴露
+├── tracing/                 # Trace 与审计
+│   ├── query_trace.py       #   QueryTrace 构建器，只写 query_traces 表，不对 API 暴露
+│   └── audit.py             #   Audit 写入助手（12 §2.5），策略决策落 audit_logs
 ├── evaluation/              # 07 号文档：接口契约（interfaces.py）+ 可脚本指标（scoring.py）
-└── tools/                   # Agent 工具层：检索类工具与契约
-    ├── contracts.py         #   工具调用契约（名称 / 参数 / 结果形态）
-    └── builtin.py           #   内置工具（知识库检索等），作用域限定当前 KB
+└── tools/                   # Agent 工具层：契约 + 内置检索 + 业务工具（Policy 门控）
+    ├── contracts.py         #   工具调用契约（含 risk_level / requires_approval）
+    ├── builtin.py           #   内置检索工具（KB 作用域，low 风险）
+    ├── gate.py              #   Policy + Audit 门控（Business Tool 执行前必经）
+    └── business.py          #   Business Tools：internal_lookup(medium) / internal_provision(high+审批)
 ```
 
 ## web/ — 前端
@@ -212,6 +218,7 @@ npm run typecheck      # tsc --noEmit
   幂等可重复执行：`psql -d <库名> -f scripts/<文件>`
 - `migrate_0.5.0.sql`：`documents.content` → BYTEA、`chunks.parent_chunk_id` → 级联删除
 - `migrate_0.6.0.sql`：LLM Wiki — `wiki_pages` / `wiki_revisions` 表 + `documents` 影子标记列
+- `migrate_0.7.0.sql`：Agent 平台 — `audit_logs` 审计日志表
 - `seed_prompts.py`：把 `app/llm/prompts/seed/` 下的 7 个模板灌入 `prompt_templates` 表
 
 > Schema 的权威事实源是 `scripts/*.sql`。`migrations/`（Alembic）目前只有 `env.py`、
@@ -249,6 +256,9 @@ LLM Wiki 相关：`RAG_WIKI_ENABLED`（总开关，关闭时 wiki 端点 503、�
 `RAG_WIKI_IN_RETRIEVAL`（混合检索是否并入 wiki 检索块）、`RAG_WIKI_MAX_CONTENT_TOKENS`、
 `RAG_WIKI_AUTO_MIN_EVIDENCE`（自动沉淀所需最少证据条数）。
 
+Agent 平台策略：`RAG_POLICY_HIGH_RISK_REQUIRES_APPROVAL`（非 admin 高风险工具动作默认需审批）、
+`RAG_POLICY_DEFAULT_DENY_HIGH_RISK`（不要求审批时是否默认拒绝高风险）。
+
 ## API 摘要
 
 - `POST /v1/query` — 提问，SSE 流式返回（meta → delta → evidence_status → done）；
@@ -264,6 +274,8 @@ LLM Wiki 相关：`RAG_WIKI_ENABLED`（总开关，关闭时 wiki 端点 503、�
 - `POST /v1/wiki/answers/{answer_id}/distill` — 把某个回答沉淀/整理进 wiki（仅 SUPPORTED/PARTIALLY_SUPPORTED）
 - `DELETE /v1/wiki/pages/{id}` — 软删 wiki 页面及其检索块
 - LLM Wiki： grounded 问答自动沉淀为版本化页面，并以"影子 document"参与混合检索（11-llm-wiki-spec）
+- `GET /metrics` — Prometheus 文本指标（HTTP 请求 / 策略拒绝 / wiki 沉淀，12-agent-platform-spec）
+- Business Tools（12）：`internal_lookup`(medium) / `internal_provision`(high+审批)，执行前经 Policy Engine 门控并记 Audit
 - 列表接口（knowledge-bases / documents / ingestion-jobs / conversations messages）统一
   Cursor 分页，返回 `{ items, next_cursor, has_more }`；`ingestion-jobs` 支持 `?status=`；
   列表 `limit` 上限 200

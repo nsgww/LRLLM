@@ -15,6 +15,7 @@ from fastapi import Header
 
 from app.core.config import get_settings
 from app.core.errors import AppError
+from app.policy.models import Subject
 
 
 def require_kb_id(x_knowledge_base_id: str | None = Header(default=None)) -> str:
@@ -46,3 +47,15 @@ def require_api_key(authorization: str | None = Header(default=None)) -> None:
             message="missing or invalid credentials",
             http_status=401,
         )
+
+
+def require_subject(
+    x_subject_id: str | None = Header(default=None),
+    x_subject_roles: str | None = Header(default=None),
+) -> Subject:
+    """解析身份主体（12 §2.4）。缺省 anonymous/user；生产可由 API Key 映射覆盖。"""
+    subject_id = (x_subject_id or "").strip() or "anonymous"
+    roles = tuple(
+        r.strip() for r in (x_subject_roles or "user").split(",") if r.strip()
+    )
+    return Subject(id=subject_id, roles=roles or ("user",))

@@ -273,3 +273,22 @@ class WikiRevisionRow(Base):
         default=WikiStatus.PUBLISHED,
     )
     created_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), server_default=sa.func.now())
+
+
+class AuditLogRow(Base):
+    """审计日志（12-agent-platform-spec §2.5）：主体/动作/资源/风险/决策/审批。"""
+
+    __tablename__ = "audit_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    subject_id: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    action: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    resource_type: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    resource_id: Mapped[str | None] = mapped_column(sa.Text)
+    knowledge_base_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    risk: Mapped[str] = mapped_column(sa.Text, nullable=False, default="low")
+    decision: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    requires_approval: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
+    approved_by: Mapped[str | None] = mapped_column(sa.Text)
+    detail: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), server_default=sa.func.now())

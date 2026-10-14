@@ -111,6 +111,10 @@ class Settings(BaseSettings):
     # /v1/query 全局并发上限（保护 LLM 配额与连接池）
     query_max_concurrency: int = 8
 
+    # policy engine（12-agent-platform-spec §2.4）：高风险工具动作处置
+    policy_high_risk_requires_approval: bool = True  # 非 admin 高风险动作默认需审批
+    policy_default_deny_high_risk: bool = False      # 不要求审批时是否默认拒绝高风险
+
     # infrastructure
     postgres_dsn: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/rag"
     qdrant_url: str = "http://localhost:6333"

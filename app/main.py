@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 
 import sqlalchemy as sa
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app.agent.runner import AgentRunner
 from app.api.routers import (
@@ -47,6 +47,8 @@ from app.services.queue import IngestionQueue
 from app.storage.keyword.store import PostgresKeywordStore
 from app.storage.postgres.db import dispose_engine, get_session_factory, init_engine
 from app.storage.qdrant.store import QdrantVectorStore
+from app.observability.metrics import get_metrics
+from app.policy import PolicyEngine
 
 logger = logging.getLogger(__name__)
 
@@ -189,11 +191,26 @@ def create_app() -> FastAPI:
 
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
+    # 12 §2.4/§2.5：策略引擎装配到 app.state，供业务工具 / 编排门控复用。
+    app.state.policy_engine = PolicyEngine(settings)
+
+    @app.get("/metrics")
+    async def metrics_endpoint() -> PlainTextResponse:
+        # Prometheus 文本（12 §2.5）；轻量计数器，零第三方依赖。
+        return PlainTextResponse(get_metrics().render(), media_type="text/plain")
+
     @app.middleware("http")
     async def request_id_middleware(request: Request, call_next):
         request.state.request_id = f"req_{uuid.uuid4().hex[:16]}"
         response = await call_next(request)
         response.headers["X-Request-ID"] = request.state.request_id
+        # 12 §2.5：HTTP 请求计数（path 用路由模板归一，避免高基数 label 爆炸）。
+        route = request.scope.get("route")
+        path = getattr(route, "path", request.url.path)
+        get_metrics().inc(
+            "http_requests_total",
+            {"path": path, "status": str(response.status_code)},
+        )
         return response
 
     @app.exception_handler(AppError)
