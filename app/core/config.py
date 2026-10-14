@@ -190,6 +190,8 @@ class Settings(BaseSettings):
     agent_tool_top_k: int = 5
     # 单轮 Agent 请求的 wall-clock 上限（秒），超时以 error 事件收敛
     agent_timeout_seconds: float = 180.0
+    # 编排引擎：False=手写 ReAct(runner._loop，默认，零回归)；True=LangGraph 图(graph.py)
+    agent_use_graph: bool = False
 
     # llm wiki（11-llm-wiki-spec section 7）：把查询沉淀的知识持续整理成版本化页面
     wiki_enabled: bool = True            # 关闭时 wiki 端点 503、自动沉淀停；不影响 /v1/query

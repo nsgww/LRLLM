@@ -142,10 +142,17 @@ class AgentRunner:
                 knowledge_base_id, query, conversation_id
             )
             trace.conversation_id = conversation_id
-            async for event in self._loop(
+            loop = self._graph_loop if self._settings.agent_use_graph else self._loop
+            interrupted = False
+            async for event in loop(
                 knowledge_base_id, query, conversation_context, trace, answer_id, started
             ):
+                if event.event == "approval_required":
+                    # Approval 挂起：透传事件，等待 resume；不落库、不发 done。
+                    interrupted = True
                 yield event
+            if interrupted:
+                return
             # 落库先于 done（与 /v1/query 一致）：确保 persist/save_trace 失败时
             # 以 error 收敛，且不会在已发 done 之后再发 error（05 §8/§14.3）。
             await self._persist(conversation_id, answer_id, trace.final_answer or "")
@@ -270,6 +277,68 @@ class AgentRunner:
         trace.latency_ms = int((time.perf_counter() - started) * 1000)
         # done 事件与落库改由 run() 在 persist/save_trace 之后统一产出，
         # 避免"先 done 后落库、落库失败又发 error"违反 05 §8/§14.3，也避免 trace 双写。
+
+    async def _graph_loop(
+        self,
+        knowledge_base_id: str,
+        query: str,
+        conversation_context: str,
+        trace: QueryTraceBuilder,
+        answer_id: str,
+        started: float,
+    ) -> AsyncIterator[AgentEvent]:
+        """LangGraph 编排分支（12 §2.2，RAG_AGENT_USE_GRAPH=true）。
+
+        用 StateGraph 驱动决策循环，事件契约与 _loop 一致（meta/tool_call/delta；
+        done 由 run 统一产出）。Approval 挂起透传 approval_required 后交 run 中止。
+        """
+        from app.agent.graph import build_agent_graph, run_graph_events
+
+        specs = build_tools(
+            knowledge_base_id=knowledge_base_id,
+            hybrid=self._hybrid,
+            rerank=self._rerank,
+            session_factory=self._session_factory,
+            settings=self._settings,
+        )
+        budget = max(1, self._settings.agent_max_iterations)
+        self._ensure_within_deadline(started)
+        trace.start_stage(AGENT_STAGE)
+        model_with_tools = self._bind_tools(specs)
+        graph = build_agent_graph(
+            model_with_tools=model_with_tools,
+            tools_by_name={s.name: s for s in specs},
+            max_iterations=budget,
+        )
+        steps: list[dict] = []
+        streamed: list[str] = []
+        async for ev in run_graph_events(
+            graph=graph,
+            knowledge_base_id=knowledge_base_id,
+            query=query,
+            answer_id=answer_id,
+            tools=specs,
+            max_iterations=budget,
+            conversation_context=conversation_context,
+        ):
+            if ev.event == "meta":
+                yield ev
+            elif ev.event == "tool_call":
+                steps.append(
+                    {"tool": ev.data.get("tool"), "arguments": ev.data.get("arguments")}
+                )
+                yield ev
+            elif ev.event == "delta":
+                streamed.append(ev.data.get("text", ""))
+                yield ev
+            elif ev.event == "approval_required":
+                # 挂起等人审：透传，trace 不标完成，由 run 中止（不落库/不发 done）。
+                yield ev
+                return
+        trace.agent_steps = steps
+        trace.final_answer = "".join(streamed)
+        trace.finish_stages()
+        trace.latency_ms = int((time.perf_counter() - started) * 1000)
 
     # -- 内部实现 ----------------------------------------------------------
 

@@ -210,3 +210,106 @@ async def test_run_graph_emits_approval_required_on_interrupt():
     kinds = [e.event for e in events]
     assert "approval_required" in kinds
     assert kinds[-1] == "approval_required"  # 挂起，不产 done
+
+
+# ---------------------------------------------------------------------------
+# runner 的 use_graph 分支（端点切换，12 §2.2）：RAG_AGENT_USE_GRAPH 走 LangGraph 图
+# ---------------------------------------------------------------------------
+
+from app.agent.runner import AgentRunner
+from app.core.config import Settings
+
+
+class _StubHybrid:
+    async def retrieve(self, query, filters, strategy):
+        from app.retrieval.hybrid import HybridResult
+
+        return HybridResult(candidates=[])
+
+
+class _StubRerank:
+    async def load_rows(self, ids):
+        return {}
+
+    async def rank(self, query, candidates, rows_by_id, sub_query_id=None):
+        from app.retrieval.rerank import RerankOutcome
+
+        return RerankOutcome(chunks=[], fallback=False)
+
+
+class _StubSF:
+    def __call__(self):
+        return self
+
+    async def __aenter__(self):
+        return object()
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _AIModel:
+    """bind_tools 返回自身 + ainvoke 返回 AIMessage（graph 的 add_messages 需要）。"""
+
+    def __init__(self, script):
+        self._script = list(script)
+
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+    async def ainvoke(self, messages, **kwargs):
+        return self._script.pop(0) if self._script else AIMessage("兜底")
+
+
+class _GraphRunner(AgentRunner):
+    def _wrap_tools(self, specs):
+        return [s.name for s in specs]
+
+    async def _conversation_setup(self, knowledge_base_id, query, conversation_id):
+        return conversation_id or knowledge_base_id, ""
+
+    async def _persist(self, *args):
+        return None
+
+    async def _save_trace(self, trace):
+        return None
+
+
+def _graph_runner(model, use_graph):
+    return _GraphRunner(
+        settings=Settings(
+            _env_file=None,
+            llm_model="m",
+            agent_max_iterations=3,
+            agent_enabled=True,
+            agent_use_graph=use_graph,
+        ),
+        session_factory=_StubSF(),
+        hybrid=_StubHybrid(),
+        rerank_service=_StubRerank(),
+        chat_model=model,
+    )
+
+
+async def test_runner_use_graph_emits_meta_delta_done():
+    events = [
+        e
+        async for e in _graph_runner(_AIModel([AIMessage("图答案")]), use_graph=True).run(
+            "kb", "q"
+        )
+    ]
+    kinds = [e.event for e in events]
+    assert kinds[0] == "meta"
+    assert kinds[-1] == "done"
+    assert any(e.data.get("text") == "图答案" for e in events if e.event == "delta")
+
+
+async def test_runner_default_uses_loop_still_done():
+    # 默认(use_graph=False)走手写 _loop，行为不变（零回归）。
+    events = [
+        e
+        async for e in _graph_runner(
+            _AIModel([AIMessage("loop答案")]), use_graph=False
+        ).run("kb", "q")
+    ]
+    assert events[-1].event == "done"
