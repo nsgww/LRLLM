@@ -57,3 +57,50 @@ class IngestionQueue:
     async def aclose(self) -> None:
         if self._client is not None:
             await self._client.aclose()
+
+
+EVENT_QUEUE_KEY = "rag:events:queue"
+
+
+class EventQueue:
+    """入站事件队列（12-agent-platform-spec §2.1 接入层）。
+
+    与 IngestionQueue 同模式、独立 key；事件以 JSON 字符串入队，消费端
+    （触发对应 Job / Agent）作为后续接入。
+    """
+
+    def __init__(self, redis_url: str, enabled: bool = True) -> None:
+        self._enabled = enabled
+        self._client = redis.from_url(redis_url) if enabled else None
+        self._broken = False
+
+    @property
+    def usable(self) -> bool:
+        return self._client is not None and not self._broken
+
+    async def enqueue(self, payload: str) -> None:
+        if self._client is None or self._broken:
+            return
+        try:
+            await self._client.rpush(EVENT_QUEUE_KEY, payload)
+        except Exception as exc:
+            logger.warning("redis event enqueue failed: %s", exc)
+            self._broken = True
+
+    async def dequeue(self, timeout: float) -> str | None:
+        if self._client is None or self._broken:
+            return None
+        try:
+            item = await self._client.blpop(EVENT_QUEUE_KEY, timeout=max(1, int(timeout)))
+        except Exception as exc:
+            logger.warning("redis event dequeue failed: %s", exc)
+            self._broken = True
+            return None
+        if item is None:
+            return None
+        _, payload = item
+        return payload.decode() if isinstance(payload, bytes) else str(payload)
+
+    async def aclose(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()

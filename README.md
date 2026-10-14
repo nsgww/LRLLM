@@ -276,6 +276,7 @@ Agent 平台策略：`RAG_POLICY_HIGH_RISK_REQUIRES_APPROVAL`（非 admin 高风
 - `DELETE /v1/wiki/pages/{id}` — 软删 wiki 页面及其检索块
 - LLM Wiki： grounded 问答自动沉淀为版本化页面，并以"影子 document"参与混合检索（11-llm-wiki-spec）
 - `GET /metrics` — Prometheus 文本指标（HTTP 请求 / 策略拒绝 / wiki 沉淀，12-agent-platform-spec）
+- `POST /v1/events` — 入站事件（12 §2.1）：归一化入 EventQueue 异步处理（KB 作用域）
 - Business Tools（12）：`internal_lookup`(medium) / `internal_provision`(high+审批)，执行前经 Policy Engine 门控并记 Audit
 - 列表接口（knowledge-bases / documents / ingestion-jobs / conversations messages）统一
   Cursor 分页，返回 `{ items, next_cursor, has_more }`；`ingestion-jobs` 支持 `?status=`；

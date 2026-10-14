@@ -20,6 +20,7 @@ from app.api.routers import (
     answers,
     conversations,
     documents,
+    events,
     ingestion_jobs,
     knowledge_bases,
     query,
@@ -43,7 +44,7 @@ from app.services.wiki_service import WikiService
 from app.services.ingestion_service import IngestionService
 from app.services.knowledge_base_service import KnowledgeBaseService
 from app.services.query_service import QueryService
-from app.services.queue import IngestionQueue
+from app.services.queue import EventQueue, IngestionQueue
 from app.storage.keyword.store import PostgresKeywordStore
 from app.storage.postgres.db import dispose_engine, get_session_factory, init_engine
 from app.storage.qdrant.store import QdrantVectorStore
@@ -178,10 +179,13 @@ def create_app() -> FastAPI:
                 "/v1/agent will return 503. Install with: "
                 "pip install 'langchain-core>=0.3' 'langchain-openai>=0.2'"
             )
+        # 12 §2.1 接入层：入站事件队列（POST /v1/events）。
+        app.state.event_queue = EventQueue(settings.redis_url)
         try:
             yield
         finally:
             await queue.aclose()
+            await app.state.event_queue.aclose()
             await llm.aclose()
             await embedding.aclose()
             if reranker is not None:
@@ -251,6 +255,7 @@ def create_app() -> FastAPI:
     for module in (
         knowledge_bases,
         documents,
+        events,
         ingestion_jobs,
         query,
         agent,

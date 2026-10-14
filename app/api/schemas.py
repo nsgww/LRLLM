@@ -148,3 +148,10 @@ class WikiDistillOut(BaseModel):
     slug: str = ""
     title: str = ""
     reason: str = ""
+
+
+class EventIn(BaseModel):
+    """入站事件（12 §2.1 接入层）：KB 作用域来自头，此处只带类型与负载。"""
+
+    type: str
+    payload: dict = {}
