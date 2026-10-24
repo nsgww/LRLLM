@@ -10,9 +10,22 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
+# langchain / langgraph 是本项目的**可选**依赖（见 app/agent/graph.py 的延迟
+# 导入设计）。缺失时必须让本模块整体 skip，而不是在 collection 阶段抛
+# ModuleNotFoundError —— 那会中断整个测试套件，连不依赖 langchain 的用例
+# 都跑不了。
+pytest.importorskip("langchain_core")
+pytest.importorskip("langgraph")
+
 from langchain_core.messages import AIMessage
 
-from app.agent.graph import build_agent_graph, resume_graph, run_graph_events
+from app.agent.graph import (
+    build_agent_graph,
+    resume_graph,
+    run_graph_events,
+)
 from app.tools.contracts import ToolSpec
 
 
@@ -28,7 +41,7 @@ class _FakeModel:
 
 
 def _tool(name: str = "t", requires_approval: bool = False, handler=None) -> ToolSpec:
-    async def _default(x):  # noqa: ANN001
+    async def _default(x):
         return "结果"
 
     return ToolSpec(
@@ -55,6 +68,7 @@ def _initial(answer_id: str, messages=None) -> dict:
         "final_answer": "",
         "done": False,
         "subject_is_admin": False,
+        "approvals": [],
     }
 
 
@@ -132,7 +146,7 @@ def test_graph_checkpoint_queryable():
 async def test_approval_interrupt_then_denied_does_not_execute():
     executed: list = []
 
-    async def handler(x):  # noqa: ANN001
+    async def handler(x):
         executed.append(x)
         return "已执行写操作"
 
@@ -161,7 +175,7 @@ async def test_approval_interrupt_then_denied_does_not_execute():
 async def test_approval_resume_approved_executes():
     executed: list = []
 
-    async def handler(x):  # noqa: ANN001
+    async def handler(x):
         executed.append(x)
         return "已执行写操作"
 
@@ -185,8 +199,58 @@ async def test_approval_resume_approved_executes():
     assert final["done"] is True
 
 
+async def test_approval_interrupt_does_not_replay_earlier_tool():
+    """回归：resume 不得重复执行同批已完成的工具。
+
+    LangGraph 恢复挂起时会**从头重跑整个节点**。若 interrupt 写在 act 的
+    tool_calls 循环内，「低风险工具先执行 → 高风险工具挂起」再 resume，
+    低风险工具会被执行两次（副作用翻倍）。审批隔离到无副作用的 approve
+    节点后：审批前不执行任何工具，resume 后每个工具恰好执行一次。
+    """
+    read_calls: list = []
+    write_calls: list = []
+
+    async def read_handler(x):
+        read_calls.append(x)
+        return "读结果"
+
+    async def write_handler(x):
+        write_calls.append(x)
+        return "写结果"
+
+    read_tool = _tool("read_data", requires_approval=False, handler=read_handler)
+    write_tool = _tool("provision", requires_approval=True, handler=write_handler)
+    model = _FakeModel(
+        [
+            AIMessage(
+                "",
+                tool_calls=[
+                    {"name": "read_data", "args": {"x": 1}, "id": "c1"},
+                    {"name": "provision", "args": {"x": 2}, "id": "c2"},
+                ],
+            ),
+            AIMessage("完成"),
+        ]
+    )
+    graph = build_agent_graph(
+        model_with_tools=model,
+        tools_by_name={"read_data": read_tool, "provision": write_tool},
+        max_iterations=3,
+    )
+    cfg = {"configurable": {"thread_id": "no-replay"}}
+    await graph.ainvoke(_initial("no-replay"), config=cfg)
+
+    assert graph.get_state(cfg).next  # 挂在审批
+    assert read_calls == []  # 审批前一个工具都不执行（approve 节点无副作用）
+    assert write_calls == []
+
+    await resume_graph(graph=graph, thread_id="no-replay", approved=True)
+    assert read_calls == [1]  # 恰好一次；旧实现此处会是 [1, 1]
+    assert write_calls == [2]
+
+
 async def test_run_graph_emits_approval_required_on_interrupt():
-    async def handler(x):  # noqa: ANN001
+    async def handler(x):
         return "已执行"
 
     tool = _tool("provision", requires_approval=True, handler=handler)

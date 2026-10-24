@@ -27,7 +27,13 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import MessagesState
 from langgraph.types import Command, interrupt
 
-from app.agent.runner import AgentEvent, _message_text, _parse_call, _tool_calls_of, _tool_message
+from app.agent.runner import (
+    AgentEvent,
+    _message_text,
+    _parse_call,
+    _tool_calls_of,
+    _tool_message,
+)
 from app.tools.contracts import ERROR_PREFIX, ToolSpec
 
 logger = logging.getLogger(__name__)
@@ -47,6 +53,9 @@ class AgentGraphState(MessagesState):
     final_answer: str
     done: bool
     subject_is_admin: bool
+    # 上一轮 approve 节点产出的逐调用审批结果（True=可执行）。
+    # 与 messages 里最后一条 AI 消息的 tool_calls 一一对应。
+    approvals: list[bool]
 
 
 async def _invoke_tool(spec: ToolSpec, arguments: dict) -> str:
@@ -57,7 +66,7 @@ async def _invoke_tool(spec: ToolSpec, arguments: dict) -> str:
         return await spec.handler(**kwargs)
     except TypeError:
         return f"{ERROR_PREFIX} 参数不合规，允许的参数为 {sorted(allowed)}。"
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("graph tool %s raised", spec.name, exc_info=True)
         return f"{ERROR_PREFIX} {type(exc).__name__}"
 
@@ -84,34 +93,68 @@ def build_agent_graph(
         response = await model_with_tools.ainvoke(state["messages"])
         return {"messages": [response], "iterations": state["iterations"] + 1}
 
+    async def approve(state: AgentGraphState) -> dict:
+        """审批节点：只计算「哪些调用可执行」，**不执行任何工具**。
+
+        为什么必须单独成节点（而不是在 act 的循环里 interrupt）：
+        LangGraph 恢复挂起时会把**整个节点从头重跑**。若 interrupt 写在
+        ``act`` 的 tool_calls 循环内，「前一个工具已执行 → 后一个需审批 →
+        挂起」的情况下，resume 会让前一个工具**重复执行**（副作用翻倍）。
+        把审批隔离到无副作用节点后，重跑 approve 只是重新收集 resume 值，
+        act 仍只执行一次（12 §2.2/§4）。
+
+        多个待审批调用合并成**一次** interrupt：避免同一节点内多次
+        interrupt 时的恢复顺序耦合（与 ``resume_graph(approved=bool)`` 的
+        单值签名一致）。
+        """
+        last = state["messages"][-1]
+        is_admin = state.get("subject_is_admin", False)
+        calls = _tool_calls_of(last)
+        # 默认放行；需审批的调用先置 False，获批后翻回 True
+        approvals: list[bool] = [True] * len(calls)
+        pending: list[dict[str, Any]] = []
+        for index, call in enumerate(calls):
+            name, arguments, call_id = _parse_call(call, index)
+            spec = tools_by_name.get(name)
+            if spec is None or not spec.requires_approval or is_admin:
+                continue
+            approvals[index] = False
+            pending.append(
+                {"index": index, "tool": name, "arguments": arguments, "call_id": call_id}
+            )
+
+        if pending and approval_mode == "interrupt":
+            decision = interrupt(
+                {
+                    "pending": [
+                        {"tool": p["tool"], "arguments": p["arguments"]} for p in pending
+                    ]
+                }
+            )
+            if isinstance(decision, dict) and decision.get("approved"):
+                for item in pending:
+                    approvals[item["index"]] = True
+        return {"approvals": approvals}
+
     async def act(state: AgentGraphState) -> dict:
         last = state["messages"][-1]
         tool_msgs: list[Any] = []
         steps = list(state["steps"])
-        is_admin = state.get("subject_is_admin", False)
         ctx = policy_ctx or {}
-        for call in _tool_calls_of(last):
-            name, arguments, call_id = _parse_call(call, len(steps))
+        approvals = list(state.get("approvals") or [])
+        for index, call in enumerate(_tool_calls_of(last)):
+            name, arguments, call_id = _parse_call(call, index)
             spec = tools_by_name.get(name)
-            if spec is not None and spec.requires_approval and not is_admin:
-                if approval_mode == "reject":
-                    # 无 resume 闭环：直接拒绝执行并反馈，保持 done/error 收尾契约。
-                    steps.append({"tool": name, "arguments": arguments})
-                    tool_msgs.append(
-                        _tool_message(
-                            call_id,
-                            f"APPROVAL_REQUIRED: {name} 属高风险动作，需人工审批后执行，本次未执行。",
-                        )
-                    )
-                    continue
-                # interrupt 模式：挂起等待人审（12 §2.2/§4）。resume 值即 interrupt 返回值。
-                approval = interrupt({"tool": name, "arguments": arguments})
-                if not (isinstance(approval, dict) and approval.get("approved")):
-                    steps.append({"tool": name, "arguments": arguments})
-                    tool_msgs.append(
-                        _tool_message(call_id, f"APPROVAL_DENIED: {name} 未获审批，已跳过。")
-                    )
-                    continue
+            # approve 节点判定不可执行：拒绝并反馈，绝不进入 handler。
+            if spec is not None and index < len(approvals) and not approvals[index]:
+                steps.append({"tool": name, "arguments": arguments})
+                denial = (
+                    "APPROVAL_REQUIRED: 属高风险动作，需人工审批后执行，本次未执行。"
+                    if approval_mode == "reject"
+                    else "APPROVAL_DENIED: 未获审批，已跳过。"
+                )
+                tool_msgs.append(_tool_message(call_id, f"{denial}（{name}）"))
+                continue
             if spec is None:
                 result = f"{ERROR_PREFIX} 未知工具 {name}。"
             elif ctx.get("settings") is not None:
@@ -146,15 +189,20 @@ def build_agent_graph(
         if state["iterations"] >= max_iterations:
             return "finalize"
         if _tool_calls_of(state["messages"][-1]):
-            return "act"
+            return "approve"
         return "finalize"
 
     builder = StateGraph(AgentGraphState)
     builder.add_node("reason", reason)
+    builder.add_node("approve", approve)
     builder.add_node("act", act)
     builder.add_node("finalize", finalize)
     builder.add_edge(START, "reason")
-    builder.add_conditional_edges("reason", route, {"act": "act", "finalize": "finalize"})
+    builder.add_conditional_edges(
+        "reason", route, {"approve": "approve", "finalize": "finalize"}
+    )
+    # approve（无副作用）→ act（唯一执行点）：resume 重跑 approve 安全。
+    builder.add_edge("approve", "act")
     builder.add_edge("act", "reason")
     builder.add_edge("finalize", END)
     return builder.compile(checkpointer=checkpointer or MemorySaver())
@@ -172,6 +220,7 @@ def _initial_state(
         "final_answer": "",
         "done": False,
         "subject_is_admin": subject_is_admin,
+        "approvals": [],
     }
 
 
