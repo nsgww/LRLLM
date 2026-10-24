@@ -27,6 +27,9 @@ psql -d rag -f scripts/migrate_0.4.0.sql
 psql -d rag -f scripts/migrate_0.5.0.sql   # content->BYTEA、parent_chunk_id 级联删除
 psql -d rag -f scripts/migrate_0.6.0.sql   # LLM Wiki：wiki_pages/wiki_revisions + documents 影子标记
 psql -d rag -f scripts/migrate_0.7.0.sql   # Agent 平台：audit_logs 审计表
+psql -d rag -f scripts/migrate_0.8.0.sql   # wiki 列表索引对齐、保留期清理索引
+#    可选：把 schema 版本锚定到 alembic 基线（之后可用 autogenerate 生成变更参考）
+alembic stamp 0001
 
 # 3. 配置环境
 copy .env.example .env   # 填入 LLM / Embedding 的 key 与 model

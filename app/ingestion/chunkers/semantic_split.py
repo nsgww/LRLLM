@@ -47,7 +47,7 @@ class EmbeddingSentenceSplitter:
 
         try:
             vectors = await self._embedding.embed_documents(sentences)
-        except Exception:
+        except Exception:  # noqa: BLE001 - Embedding 不可用时退回顺序切分
             # Embedding 不可用不应阻断入库：退回顺序切分
             return token_split(text, max_tokens, self._counter)
 

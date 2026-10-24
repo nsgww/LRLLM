@@ -249,6 +249,53 @@ async def test_approval_interrupt_does_not_replay_earlier_tool():
     assert write_calls == [2]
 
 
+async def test_high_risk_without_explicit_flag_still_requires_approval():
+    """``risk_level="high"`` 但未设 ``requires_approval`` 也要弹审批。
+
+    审批判定必须与 ``execute_with_policy`` 同源（PolicyEngine），否则会出现
+    「闸口要求审批、图却不弹审批」的分叉：工具被静默拒绝而不是等人审。
+    """
+    from app.core.config import Settings
+    from app.policy.models import Subject
+
+    executed: list = []
+
+    async def handler(x):
+        executed.append(x)
+        return "已执行"
+
+    tool = ToolSpec(
+        name="danger",
+        description="d",
+        parameters={
+            "type": "object",
+            "properties": {"x": {"type": "number"}},
+            "required": ["x"],
+        },
+        handler=handler,
+        risk_level="high",
+        requires_approval=False,  # 只标风险等级，没显式要求审批
+    )
+    model = _FakeModel(
+        [AIMessage("", tool_calls=[{"name": "danger", "args": {"x": 1}, "id": "c1"}])]
+    )
+    graph = build_agent_graph(
+        model_with_tools=model,
+        tools_by_name={"danger": tool},
+        max_iterations=3,
+        policy_ctx={
+            "settings": Settings(_env_file=None, llm_model="m"),
+            "subject": Subject(id="u1", roles=("user",)),
+            "kb_id": "kb",
+        },
+    )
+    cfg = {"configurable": {"thread_id": "risk-high"}}
+    await graph.ainvoke(_initial("risk-high"), config=cfg)
+
+    assert graph.get_state(cfg).next  # 挂在审批，而不是直接执行
+    assert executed == []
+
+
 async def test_run_graph_emits_approval_required_on_interrupt():
     async def handler(x):
         return "已执行"

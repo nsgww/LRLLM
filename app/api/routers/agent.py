@@ -116,7 +116,7 @@ async def agent(
                         {"error": {"code": exc.code, "stage": exc.stage, "message": exc.message}},
                     )
                     break
-                except Exception:
+                except Exception:  # noqa: BLE001 - SSE 必须收尾，不能静默断流
                     # 兜底：任何未分类异常都要以一个 error 帧收尾，绝不静默断流。
                     yield _sse(
                         "error",

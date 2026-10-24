@@ -65,5 +65,5 @@ def _extract_json(raw: str) -> dict:
             raise
         parsed = json.loads(text[start : end + 1])
     if not isinstance(parsed, dict):
-        raise ValueError("LLM output JSON is not an object")
+        raise ValueError("LLM output JSON is not an object")  # noqa: TRY004 - 契约错误，非类型错误
     return parsed

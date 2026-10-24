@@ -84,6 +84,29 @@ class QueryService:
         self._wiki = wiki_service
         self._bg_tasks: set[asyncio.Task] = set()
 
+    async def aclose(self, timeout: float = 10.0) -> None:
+        """收尾在跑的后台沉淀任务。
+
+        自动沉淀是 fire-and-forget，若进程直接退出，in-flight 的 distill 会被
+        静默丢弃（页面已提交但向量没写、或整个版本丢失）。这里给一个短暂宽限
+        期让它们落地，超时则取消——distill 失败只丢这一条沉淀，不影响已回答的
+        答案与 SSE。
+        """
+        pending = [task for task in self._bg_tasks if not task.done()]
+        if not pending:
+            return
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*pending, return_exceptions=True), timeout=timeout
+            )
+        except TimeoutError:
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            logger.warning(
+                "cancelled %s lingering background distill task(s)", len(pending)
+            )
+
     async def ask(
         self,
         knowledge_base_id: str,

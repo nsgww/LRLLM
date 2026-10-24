@@ -35,7 +35,7 @@ class IngestionQueue:
             return
         try:
             await self._client.rpush(QUEUE_KEY, job_id)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - Redis 故障降级到 DB 兜底，需捕获全部
             # Redis 故障不得阻断上传：任务已在 DB，Worker 扫库会拾取
             logger.warning("redis enqueue failed, falling back to db polling: %s", exc)
             self._broken = True
@@ -45,7 +45,7 @@ class IngestionQueue:
             return None
         try:
             item = await self._client.blpop(QUEUE_KEY, timeout=max(1, int(timeout)))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - Redis 故障降级到 DB 兜底，需捕获全部
             logger.warning("redis dequeue failed, falling back to db polling: %s", exc)
             self._broken = True
             return None
@@ -64,7 +64,7 @@ class IngestionQueue:
             return None
         try:
             item = await self._client.lpop(QUEUE_KEY)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - Redis 故障降级到 DB 兜底，需捕获全部
             logger.warning("redis lpop failed, falling back to db polling: %s", exc)
             self._broken = True
             return None
@@ -85,13 +85,17 @@ class EventQueue:
 
     与 IngestionQueue 同模式、独立 key；事件以 JSON 字符串入队，消费端
     （触发对应 Job / Agent）作为后续接入。
+
+    容量语义：``maxlen`` 是**硬上限**，满了直接拒收（``enqueue`` 返回
+    False，路由转 503）。不用 LTRIM 丢弃最旧事件——那会在调用方拿到 202
+    「已受理」的同时把事件悄悄扔掉，与路由声明的「宁可拒收也不丢事件」
+    相矛盾。无消费端时运营者会持续看到 503，这是可见的、可修的信号。
     """
 
     def __init__(self, redis_url: str, enabled: bool = True, maxlen: int = 10000) -> None:
         self._enabled = enabled
         self._client = redis.from_url(redis_url) if enabled else None
         self._broken = False
-        # 无消费端时防 Redis 无界增长：只保留最近 maxlen 条。
         self._maxlen = maxlen
 
     @property
@@ -99,15 +103,21 @@ class EventQueue:
         return self._client is not None and not self._broken
 
     async def enqueue(self, payload: str) -> bool:
-        """入队并返回是否成功；失败静默降级（调用方据此决定是否拒收）。"""
+        """入队并返回是否受理；容量满或 Redis 不可用返回 False。"""
         if self._client is None or self._broken:
             return False
         try:
-            await self._client.rpush(EVENT_QUEUE_KEY, payload)
             if self._maxlen and self._maxlen > 0:
-                await self._client.ltrim(EVENT_QUEUE_KEY, -self._maxlen, -1)
+                size = await self._client.llen(EVENT_QUEUE_KEY)
+                if size >= self._maxlen:
+                    # 不丢旧事件：宁可让调用方拿到 503 去重试/告警。
+                    logger.error(
+                        "event queue full (%s/%s); event rejected", size, self._maxlen
+                    )
+                    return False
+            await self._client.rpush(EVENT_QUEUE_KEY, payload)
             return True
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - Redis 故障降级到 DB 兜底，需捕获全部
             logger.warning("redis event enqueue failed: %s", exc)
             self._broken = True
             return False
@@ -117,7 +127,7 @@ class EventQueue:
             return None
         try:
             item = await self._client.blpop(EVENT_QUEUE_KEY, timeout=max(1, int(timeout)))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - Redis 故障降级到 DB 兜底，需捕获全部
             logger.warning("redis event dequeue failed: %s", exc)
             self._broken = True
             return None

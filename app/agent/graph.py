@@ -71,6 +71,31 @@ async def _invoke_tool(spec: ToolSpec, arguments: dict) -> str:
         return f"{ERROR_PREFIX} {type(exc).__name__}"
 
 
+def _needs_approval(spec: ToolSpec, settings: Any | None, subject: Any | None) -> bool:
+    """判定某工具调用是否需要人工审批。
+
+    生产路径（``policy_ctx`` 带 settings）交给 ``PolicyEngine``，与
+    ``execute_with_policy`` 同一套规则：这样 ``risk_level="high"`` 但未显式
+    设 ``requires_approval`` 的工具也会弹审批，不会出现「闸口要审批、图不弹」
+    的分叉。缺省（单测直接构图）回退到 ToolSpec 的显式标记。
+    """
+    explicit = bool(getattr(spec, "requires_approval", False))
+    if settings is None:
+        return explicit
+
+    from app.policy import PolicyEngine
+    from app.policy.models import ANONYMOUS, Resource
+
+    decision = PolicyEngine(settings).evaluate(
+        subject or ANONYMOUS,
+        spec.name,
+        Resource(type="tool", id=spec.name),
+        tool_risk=getattr(spec, "risk_level", "low"),
+        tool_requires_approval=explicit,
+    )
+    return decision.requires_approval
+
+
 def build_agent_graph(
     *,
     model_with_tools: Any,
@@ -106,9 +131,17 @@ def build_agent_graph(
         多个待审批调用合并成**一次** interrupt：避免同一节点内多次
         interrupt 时的恢复顺序耦合（与 ``resume_graph(approved=bool)`` 的
         单值签名一致）。
+
+        判定来源：有 ``policy_ctx``（生产路径）时交给 ``PolicyEngine``，与
+        ``execute_with_policy`` 用同一套规则——否则「risk_level=high 但未显式
+        设 requires_approval」的工具会出现「闸口要求审批、图却不弹审批」的
+        分叉。缺省（单测直接构图）回退到 spec 标记。
         """
         last = state["messages"][-1]
         is_admin = state.get("subject_is_admin", False)
+        ctx = policy_ctx or {}
+        settings = ctx.get("settings")
+        subject = ctx.get("subject")
         calls = _tool_calls_of(last)
         # 默认放行；需审批的调用先置 False，获批后翻回 True
         approvals: list[bool] = [True] * len(calls)
@@ -116,7 +149,9 @@ def build_agent_graph(
         for index, call in enumerate(calls):
             name, arguments, call_id = _parse_call(call, index)
             spec = tools_by_name.get(name)
-            if spec is None or not spec.requires_approval or is_admin:
+            if spec is None or is_admin:
+                continue
+            if not _needs_approval(spec, settings, subject):
                 continue
             approvals[index] = False
             pending.append(

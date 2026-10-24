@@ -6,6 +6,7 @@ Qdrant collection; a mismatch refuses to start (10 section 8).
 
 import asyncio
 import logging
+import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -185,6 +186,8 @@ def create_app() -> FastAPI:
         try:
             yield
         finally:
+            # 后台沉淀任务先收尾：它们在用 session 与向量库，必须在释放前结束。
+            await app.state.query_service.aclose()
             await queue.aclose()
             await app.state.event_queue.aclose()
             await llm.aclose()
@@ -208,13 +211,19 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def request_id_middleware(request: Request, call_next):
         request.state.request_id = f"req_{uuid.uuid4().hex[:16]}"
+        started = time.perf_counter()
         try:
             response = await call_next(request)
         except Exception:
-            # 异常路径也要计数（5xx 不在指标里隐形）；X-Request-ID 由兜底
-            # exception handler 补齐（05 §2）。
+            # 异常路径也要计数/计时（5xx 不在指标里隐形）；X-Request-ID 由
+            # 兜底 exception handler 补齐（05 §2）。
             get_metrics().inc(
                 "http_requests_total", {"path": "unmatched", "status": "500"}
+            )
+            get_metrics().observe(
+                "http_request_duration_ms",
+                (time.perf_counter() - started) * 1000,
+                {"path": "unmatched"},
             )
             raise
         response.headers["X-Request-ID"] = request.state.request_id
@@ -225,6 +234,12 @@ def create_app() -> FastAPI:
         get_metrics().inc(
             "http_requests_total",
             {"path": path, "status": str(response.status_code)},
+        )
+        # 延迟按路由模板聚合（与计数同一套 label，基数受控）。
+        get_metrics().observe(
+            "http_request_duration_ms",
+            (time.perf_counter() - started) * 1000,
+            {"path": path},
         )
         return response
 

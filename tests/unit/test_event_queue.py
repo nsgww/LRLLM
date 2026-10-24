@@ -14,10 +14,14 @@ class _FakeRedis:
         self.q.append(val)
         return len(self.q)
 
-    async def ltrim(self, key, start, end):
-        # 与 Redis 语义一致：保留 [start, end] 区间（负索引从尾部计数）。
-        self.q = self.q[start:] if end == -1 else self.q
-        return True
+    async def llen(self, key):
+        return len(self.q)
+
+    async def lpop(self, key):
+        if not self.q:
+            return None
+        value = self.q.pop(0)
+        return value.encode() if isinstance(value, str) else value
 
     async def blpop(self, key, timeout):
         if self.q:
@@ -38,6 +42,24 @@ def test_event_queue_roundtrip(monkeypatch):
     assert out == '{"event_id":"e1","type":"doc.uploaded"}'
     asyncio.run(q.aclose())
     assert fake.closed is True
+
+
+def test_event_queue_rejects_when_full_instead_of_dropping(monkeypatch):
+    """满队列必须拒收（调用方转 503），不能丢最旧事件。
+
+    否则调用方拿到 202「已受理」而事件被静默丢弃，与接入层声明的
+    「宁可拒收也不丢事件」相矛盾。
+    """
+    fake = _FakeRedis()
+    monkeypatch.setattr("app.services.queue.redis.from_url", lambda url: fake)
+    q = EventQueue("redis://x", maxlen=2)
+
+    assert asyncio.run(q.enqueue("e1")) is True
+    assert asyncio.run(q.enqueue("e2")) is True
+    assert asyncio.run(q.enqueue("e3")) is False  # 满了：拒收
+
+    # 旧事件必须完整保留
+    assert fake.q == ["e1", "e2"]
 
 
 def test_ingestion_queue_dequeue_nowait_is_non_blocking(monkeypatch):

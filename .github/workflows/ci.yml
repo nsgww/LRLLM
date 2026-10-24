@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支的新推送取消旧运行，避免排队浪费
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: lint + unit (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 是 requires-python 下限，3.13 是当前生产环境
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Ruff
+        run: ruff check app tests workers
+
+      # 无基础设施时集成测试自动 skip；langchain/langgraph 已随主依赖安装，
+      # 因此 test_graph / test_agent 在这里是真正跑起来的（本地常被 skip）。
+      - name: Unit tests
+        run: pytest tests -q
+
+  integration:
+    name: integration (postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: rag
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      RAG_POSTGRES_DSN: postgresql+asyncpg://postgres:postgres@localhost:5432/rag
+      # 集成用例不触碰 Qdrant（见 tests/integration/conftest.py），但应用
+      # 设置里有默认值，显式给出避免误连外部地址。
+      RAG_QDRANT_URL: http://localhost:6333
+      RAG_REDIS_QUEUE_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Apply schema
+        run: |
+          psql "postgresql://postgres:postgres@localhost:5432/rag" \
+            -v ON_ERROR_STOP=1 -f scripts/init_db.sql
+
+      - name: Integration tests
+        run: pytest tests/integration -q
+
+  frontend:
+    name: web (typecheck)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      # 只跑类型检查：仓库尚未配置 eslint（`next lint` 首次运行会交互式询问）。
+      - name: Typecheck
+        run: npm run typecheck

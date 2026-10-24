@@ -22,7 +22,7 @@ class TokenCounter:
             import tiktoken
 
             self._enc = tiktoken.get_encoding(encoding_name)
-        except Exception:
+        except Exception:  # noqa: BLE001 - 编码器加载失败退回估算
             # char-based estimate is a poor proxy for CJK; make the downgrade visible
             logger.warning(
                 "tiktoken encoding %r unavailable; falling back to char-based token estimate",
