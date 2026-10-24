@@ -260,6 +260,9 @@ CREATE INDEX idx_traces_kb_time ON query_traces (knowledge_base_id, created_at D
 
 CREATE INDEX idx_traces_answer ON query_traces (answer_id);
 
+-- 保留期清理：DELETE ... WHERE created_at < cutoff ORDER BY created_at LIMIT n
+CREATE INDEX idx_traces_created ON query_traces (created_at);
+
 -- 9. Prompt Template
 CREATE TABLE prompt_templates (
     id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -297,9 +300,16 @@ CREATE UNIQUE INDEX uq_wiki_page_slug
     ON wiki_pages (knowledge_base_id, slug)
     WHERE deleted_at IS NULL;
 
+-- 列表按 keyset 分页：ORDER BY created_at DESC, id DESC（repositories/wiki.py）。
+-- 索引必须与排序列一致，否则每次翻页都要对整库该 KB 的结果排序。
 CREATE INDEX idx_wiki_pages_kb
-    ON wiki_pages (knowledge_base_id, updated_at DESC)
+    ON wiki_pages (knowledge_base_id, created_at DESC, id DESC)
     WHERE deleted_at IS NULL;
+
+-- 软删除页的物理清理扫描（CleanupService._purge_wiki_pages）
+CREATE INDEX idx_wiki_pages_deleted
+    ON wiki_pages (deleted_at)
+    WHERE deleted_at IS NOT NULL;
 
 CREATE TABLE wiki_revisions (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -337,5 +347,8 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_kb_time
     ON audit_logs (knowledge_base_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_subject_time
     ON audit_logs (subject_id, created_at DESC);
+-- 保留期清理按 created_at 扫（此处没有 kb/subject 前导列可用）
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created
+    ON audit_logs (created_at);
 
 COMMIT;

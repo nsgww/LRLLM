@@ -94,6 +94,13 @@ class WikiService:
     # Distill: query trace -> structured entry -> versioned page + index #
     # ------------------------------------------------------------------ #
     async def distill(self, answer_id: str, kb_id: str | None = None) -> WikiDistillResult:
+        """把一条 grounded 回答沉淀为版本化 wiki 页面。
+
+        连接纪律：LLM 提取与 embedding 都是秒级网络等待，**不得**在持有 DB
+        连接时进行。否则几十个并发 distill 就能占满连接池，连带拖垮 /v1/query。
+        因此流程拆成「短 session 读 → 无连接做 LLM → 短 session 写 → 无连接做
+        向量」，每段都在需要时才取连接、用完立即归还。
+        """
         if not self._settings.wiki_enabled:
             raise AppError(
                 code="WIKI_DISABLED",
@@ -101,6 +108,83 @@ class WikiService:
                 http_status=503,
             )
 
+        snapshot = await self._load_distill_source(answer_id, kb_id)
+        if snapshot is None:
+            return WikiDistillResult(created=False, skipped=True, reason="empty_answer")
+        real_kb, source_query, final_answer, evidence_text, evidence_list = snapshot
+
+        try:
+            out = await self._extract(source_query, final_answer, evidence_text, "")
+        except AppError as exc:
+            raise self._extraction_error("wiki extraction failed", exc) from exc
+
+        if not out.should_create or not out.slug.strip():
+            return WikiDistillResult(created=False, skipped=True, reason="no_value")
+        slug = _normalize_slug(out.slug)
+
+        source = WikiSourceRef(
+            answer_id=answer_id, query=source_query, evidence=evidence_list
+        )
+        existing = await self._load_existing_revision(real_kb, slug)
+
+        if existing is not None:
+            page_id, page_title, page_summary, existing_content, base_version = existing
+            try:
+                merged = await self._extract(
+                    source_query, final_answer, evidence_text, existing_content
+                )
+            except AppError as exc:
+                raise self._extraction_error("wiki merge failed", exc) from exc
+            if not merged.should_create or not merged.content.strip():
+                return WikiDistillResult(
+                    created=False, skipped=True, slug=slug, reason="no_increment"
+                )
+            title = merged.title or page_title
+            summary = merged.summary or page_summary
+            plan, version = await self._append_revision(
+                kb_id=real_kb,
+                page_id=page_id,
+                slug=slug,
+                title=title,
+                summary=summary,
+                content=merged.content,
+                source=source,
+                answer_id=answer_id,
+                expected_version=base_version,
+            )
+            # 向量写入在事务提交后、且不持有连接时进行（失败只记日志）。
+            await self._apply_vectors(plan)
+            return WikiDistillResult(
+                created=False,
+                skipped=False,
+                page_id=page_id,
+                revision_version=version,
+                slug=slug,
+                title=title,
+            )
+
+        plan = await self._create_page(
+            kb_id=real_kb,
+            slug=slug,
+            title=out.title or slug,
+            summary=out.summary,
+            content=out.content,
+            source=source,
+        )
+        await self._apply_vectors(plan)
+        return WikiDistillResult(
+            created=True,
+            skipped=False,
+            page_id=plan.page_id,
+            revision_version=1,
+            slug=slug,
+            title=plan.title,
+        )
+
+    async def _load_distill_source(
+        self, answer_id: str, kb_id: str | None
+    ) -> tuple[str, str, str, str, list] | None:
+        """短 session：读取并校验轨迹，把需要的字段拷成普通值后立即释放连接。"""
         async with self._session_factory() as session:
             trace = await QueryTraceRepository(session).get_by_answer(answer_id)
             if trace is None:
@@ -123,85 +207,111 @@ class WikiService:
 
             final_answer = (trace.final_answer or "").strip()
             if not final_answer:
-                return WikiDistillResult(created=False, skipped=True, reason="empty_answer")
-
-            source_query = trace.raw_query
-            evidence_text = _evidence_text(trace.selected_chunks)
-            evidence_list = _evidence_list(trace.selected_chunks)
-            real_kb = str(trace.knowledge_base_id)
-
-            try:
-                out = await self._extract(source_query, final_answer, evidence_text, "")
-            except AppError as exc:
-                raise self._extraction_error("wiki extraction failed", exc) from exc
-
-            if not out.should_create or not out.slug.strip():
-                return WikiDistillResult(created=False, skipped=True, reason="no_value")
-            slug = _normalize_slug(out.slug)
-
-            pages = WikiPageRepository(session)
-            revisions = WikiRevisionRepository(session)
-            page = await pages.get_published_by_slug(real_kb, slug)
-            source = WikiSourceRef(
-                answer_id=answer_id, query=source_query, evidence=evidence_list
+                return None
+            return (
+                str(trace.knowledge_base_id),
+                trace.raw_query,
+                final_answer,
+                _evidence_text(trace.selected_chunks),
+                _evidence_list(trace.selected_chunks),
             )
 
-            if page is not None:
-                latest = await revisions.get_latest(str(page.id))
-                existing = latest.content if latest else ""
-                try:
-                    merged = await self._extract(
-                        source_query, final_answer, evidence_text, existing
-                    )
-                except AppError as exc:
-                    raise self._extraction_error("wiki merge failed", exc) from exc
-                if not merged.should_create or not merged.content.strip():
-                    return WikiDistillResult(
-                        created=False, skipped=True, slug=slug, reason="no_increment"
-                    )
-                title = merged.title or page.title
-                summary = merged.summary or page.summary
-                content = merged.content
-                version = await revisions.next_version(str(page.id))
-                try:
-                    await revisions.create(
-                        WikiRevision(
-                            page_id=str(page.id),
-                            version=version,
-                            content=content,
-                            source=source,
-                            change_note=f"增补自 answer {answer_id}",
-                        )
-                    )
-                except IntegrityError as exc:
-                    raise AppError(
-                        code="WIKI_CONFLICT",
-                        message="concurrent distill on the same page; retry",
-                        http_status=409,
-                    ) from exc
-                await pages.touch(
-                    str(page.id), title=title, summary=summary, revision_count=version
-                )
-                plan = await self._index_db(session, real_kb, str(page.id), slug, title, content)
-                await session.commit()
-                await self._apply_vectors(plan)
-                return WikiDistillResult(
-                    created=False,
-                    skipped=False,
-                    page_id=str(page.id),
-                    revision_version=version,
-                    slug=slug,
-                    title=title,
-                )
+    async def _load_existing_revision(
+        self, kb_id: str, slug: str
+    ) -> tuple[str, str, str, str, int] | None:
+        """短 session：取已有页面、最新正文与其版本号。
 
-            # Brand-new page
+        版本号用于写阶段的乐观并发校验：合并提取在无连接状态下进行，
+        期间可能已有别的 distill 追加了版本；写入前发现版本变化就返回 409，
+        避免基于过期内容覆盖他人增量。
+        """
+        async with self._session_factory() as session:
+            page = await WikiPageRepository(session).get_published_by_slug(kb_id, slug)
+            if page is None:
+                return None
+            latest = await WikiRevisionRepository(session).get_latest(str(page.id))
+            return (
+                str(page.id),
+                page.title,
+                page.summary,
+                latest.content if latest else "",
+                latest.version if latest else 0,
+            )
+
+    async def _append_revision(
+        self,
+        *,
+        kb_id: str,
+        page_id: str,
+        slug: str,
+        title: str,
+        summary: str,
+        content: str,
+        source: WikiSourceRef,
+        answer_id: str,
+        expected_version: int,
+    ) -> tuple[_IndexPlan, int]:
+        """短 session：写入新版本 + 影子文档，提交即释放连接。"""
+        async with self._session_factory() as session:
+            pages = WikiPageRepository(session)
+            revisions = WikiRevisionRepository(session)
+            # 乐观并发：合并提取期间若有他人追加版本，本次基于的正文已过期。
+            latest = await revisions.get_latest(page_id)
+            current_version = latest.version if latest else 0
+            if current_version != expected_version:
+                raise AppError(
+                    code="WIKI_CONFLICT",
+                    message=(
+                        "wiki page changed during distillation "
+                        f"(expected v{expected_version}, now v{current_version}); retry"
+                    ),
+                    http_status=409,
+                )
+            version = await revisions.next_version(page_id)
+            try:
+                await revisions.create(
+                    WikiRevision(
+                        page_id=page_id,
+                        version=version,
+                        content=content,
+                        source=source,
+                        change_note=f"增补自 answer {answer_id}",
+                    )
+                )
+            except IntegrityError as exc:
+                raise AppError(
+                    code="WIKI_CONFLICT",
+                    message="concurrent distill on the same page; retry",
+                    http_status=409,
+                ) from exc
+            await pages.touch(
+                page_id, title=title, summary=summary, revision_count=version
+            )
+            plan = await self._index_db(session, kb_id, page_id, slug, title, content)
+            await session.commit()
+            return plan, version
+
+    async def _create_page(
+        self,
+        *,
+        kb_id: str,
+        slug: str,
+        title: str,
+        summary: str,
+        content: str,
+        source: WikiSourceRef,
+    ) -> _IndexPlan:
+        """短 session：新建页面 + 首版 + 影子文档，提交即释放连接。"""
+        async with self._session_factory() as session:
+            pages = WikiPageRepository(session)
+            revisions = WikiRevisionRepository(session)
             try:
                 page_row = await pages.create(
                     WikiPage(
-                        knowledge_base_id=real_kb,
+                        knowledge_base_id=kb_id,
                         slug=slug,
-                        title=out.title or slug,
-                        summary=out.summary,
+                        title=title,
+                        summary=summary,
                         status=WikiStatus.PUBLISHED,
                         revision_count=1,
                     )
@@ -218,22 +328,14 @@ class WikiService:
                 WikiRevision(
                     page_id=page_id,
                     version=1,
-                    content=out.content,
+                    content=content,
                     source=source,
                     change_note="新建自问答沉淀",
                 )
             )
-            plan = await self._index_db(session, real_kb, page_id, slug, out.title or slug, out.content)
+            plan = await self._index_db(session, kb_id, page_id, slug, title, content)
             await session.commit()
-            await self._apply_vectors(plan)
-            return WikiDistillResult(
-                created=True,
-                skipped=False,
-                page_id=page_id,
-                revision_version=1,
-                slug=slug,
-                title=out.title or slug,
-            )
+            return plan
 
     async def _extract(
         self,

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
+import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.storage.postgres.orm import AuditLogRow
@@ -48,3 +50,20 @@ class AuditLogRepository:
         self._session.add(row)
         await self._session.flush()
         return row
+
+    async def delete_older_than(self, cutoff: datetime, limit: int) -> int:
+        """删除 ``created_at < cutoff`` 的审计行，单次最多 ``limit`` 行。
+
+        审计保留期通常远长于轨迹（合规留痕），由调用方按配置决定 cutoff。
+        """
+        ids = (
+            sa.select(AuditLogRow.id)
+            .where(AuditLogRow.created_at < cutoff)
+            .order_by(AuditLogRow.created_at)
+            .limit(limit)
+            .scalar_subquery()
+        )
+        result = await self._session.execute(
+            sa.delete(AuditLogRow).where(AuditLogRow.id.in_(ids))
+        )
+        return result.rowcount or 0

@@ -193,3 +193,111 @@ def test_rerank_service_exposes_expected_api():
 @pytest.mark.parametrize("_unused", [None])
 def test_ranked_chunk_helper_is_valid(_unused):
     assert _ranked("c1").chunk_id == "c1"
+
+
+# ---------- 保留策略：query_traces / audit_logs 不得无界增长 ----------
+
+
+def _cleanup_service(**kwargs):
+    from app.services.cleanup_service import CleanupService
+
+    return CleanupService(
+        lambda: _FakeSession(), _FakeVectorStore(), batch_size=10, **kwargs
+    )
+
+
+def test_retention_zero_means_keep_forever(monkeypatch):
+    """0 天 = 永久保留：不得触碰仓储层（升级后不能意外删数据）。"""
+    from app.services import cleanup_service as mod
+
+    touched: list = []
+
+    class _Repo:
+        def __init__(self, session) -> None:
+            pass
+
+        async def delete_older_than(self, cutoff, limit):
+            touched.append(cutoff)
+            return 5
+
+    monkeypatch.setattr(mod, "QueryTraceRepository", _Repo)
+    monkeypatch.setattr(mod, "AuditLogRepository", _Repo)
+
+    service = _cleanup_service(trace_retention_days=0, audit_retention_days=0)
+    assert asyncio.run(service._purge_traces()) == 0
+    assert asyncio.run(service._purge_audit_logs()) == 0
+    assert touched == []
+
+
+def test_retention_deletes_in_batches_until_short(monkeypatch):
+    """满批继续删，遇到不满批即停（深表不会被单轮一次性删空锁表）。"""
+    from app.services import cleanup_service as mod
+
+    batches = [10, 10, 3]
+    calls: list[int] = []
+
+    class _Repo:
+        def __init__(self, session) -> None:
+            pass
+
+        async def delete_older_than(self, cutoff, limit):
+            calls.append(limit)
+            return batches.pop(0) if batches else 0
+
+    monkeypatch.setattr(mod, "QueryTraceRepository", _Repo)
+
+    service = _cleanup_service(trace_retention_days=30)
+    assert asyncio.run(service._purge_traces()) == 23
+    assert len(calls) == 3
+
+
+def test_retention_caps_batches_per_run(monkeypatch):
+    """单轮最多 50 批：首次接入的历史积压分多轮清，避免长期锁表。"""
+    from app.services import cleanup_service as mod
+
+    calls = 0
+
+    class _Repo:
+        def __init__(self, session) -> None:
+            pass
+
+        async def delete_older_than(self, cutoff, limit):
+            nonlocal calls
+            calls += 1
+            return limit  # 永远满批，模拟大量积压
+
+    monkeypatch.setattr(mod, "QueryTraceRepository", _Repo)
+
+    service = _cleanup_service(trace_retention_days=30)
+    assert asyncio.run(service._purge_traces()) == 50 * 10
+    assert calls == 50
+
+
+def test_audit_retention_uses_audit_repository(monkeypatch):
+    """审计与轨迹是两套保留期，不能串用仓储。"""
+    from app.services import cleanup_service as mod
+
+    used: list[str] = []
+
+    class _TraceRepo:
+        def __init__(self, session) -> None:
+            pass
+
+        async def delete_older_than(self, cutoff, limit):
+            used.append("trace")
+            return 0
+
+    class _AuditRepo:
+        def __init__(self, session) -> None:
+            pass
+
+        async def delete_older_than(self, cutoff, limit):
+            used.append("audit")
+            return 0
+
+    monkeypatch.setattr(mod, "QueryTraceRepository", _TraceRepo)
+    monkeypatch.setattr(mod, "AuditLogRepository", _AuditRepo)
+
+    service = _cleanup_service(trace_retention_days=30, audit_retention_days=180)
+    asyncio.run(service._purge_audit_logs())
+    assert used == ["audit"]

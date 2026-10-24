@@ -54,6 +54,24 @@ class IngestionQueue:
         _, job_id = item
         return job_id.decode() if isinstance(job_id, bytes) else str(job_id)
 
+    async def dequeue_nowait(self) -> str | None:
+        """非阻塞取一个任务（LPOP）。
+
+        供 Worker 在拿到首个任务后继续凑批：Redis 快通道若逐个 await 处理，
+        单实例实际并发恒为 1，``ingestion_worker_concurrency`` 形同虚设。
+        """
+        if self._client is None or self._broken:
+            return None
+        try:
+            item = await self._client.lpop(QUEUE_KEY)
+        except Exception as exc:
+            logger.warning("redis lpop failed, falling back to db polling: %s", exc)
+            self._broken = True
+            return None
+        if item is None:
+            return None
+        return item.decode() if isinstance(item, bytes) else str(item)
+
     async def aclose(self) -> None:
         if self._client is not None:
             await self._client.aclose()

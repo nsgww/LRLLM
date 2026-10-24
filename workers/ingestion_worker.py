@@ -133,7 +133,13 @@ async def run() -> None:
         embedding=embedding,
         settings=settings,
     )
-    cleanup = CleanupService(session_factory, vector_store, settings.cleanup_batch_size)
+    cleanup = CleanupService(
+        session_factory,
+        vector_store,
+        settings.cleanup_batch_size,
+        trace_retention_days=settings.trace_retention_days,
+        audit_retention_days=settings.audit_retention_days,
+    )
     queue = IngestionQueue(settings.redis_url, settings.redis_queue_enabled)
     concurrency = max(1, settings.ingestion_worker_concurrency)
 
@@ -148,17 +154,32 @@ async def run() -> None:
             # 快速通道：队列有任务就连续消费，没有则等一个轮询周期
             job_id = await queue.dequeue(settings.ingestion_poll_interval_seconds)
             if job_id is not None:
-                await process_job(pipeline, job_id)
+                # 凑批后并发处理：逐个 await 会让 Redis 路径的实际并发恒为 1，
+                # ``ingestion_worker_concurrency`` 只在 DB 兜底分支生效。
+                batch = [job_id]
+                while len(batch) < concurrency:
+                    extra = await queue.dequeue_nowait()
+                    if extra is None:
+                        break
+                    batch.append(extra)
+                await asyncio.gather(*(process_job(pipeline, jid) for jid in batch))
                 continue
             # 队列空（或 Redis 不可用）：周期扫库兜底
             try:
                 await reclaim_stale_jobs(session_factory, settings)
                 report = await cleanup.run_once()
-                if report.chunks_purged or report.documents_purged:
+                if (
+                    report.chunks_purged
+                    or report.documents_purged
+                    or report.traces_purged
+                    or report.audit_logs_purged
+                ):
                     logger.info(
-                        "cleanup purged chunks=%s documents=%s",
+                        "cleanup purged chunks=%s documents=%s traces=%s audit=%s",
                         report.chunks_purged,
                         report.documents_purged,
+                        report.traces_purged,
+                        report.audit_logs_purged,
                     )
             except Exception:
                 # 维护任务是尽力而为：单轮失败只记录，绝不能让 worker 进程退出

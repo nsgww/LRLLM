@@ -213,6 +213,11 @@ class Settings(BaseSettings):
 
     # background physical cleanup
     cleanup_batch_size: int = 200
+    # 查询轨迹保留天数（0 = 永久保留）。轨迹每问一行且含多个 JSONB，
+    # 不设保留期会无界增长；默认 30 天，兼顾排障与容量。
+    trace_retention_days: int = 30
+    # 审计日志保留天数（0 = 永久保留）。合规留痕通常远长于轨迹。
+    audit_retention_days: int = 180
 
     @field_validator("llm_base_url", "embedding_base_url", "reranker_base_url")
     @classmethod
