@@ -35,22 +35,22 @@ from app.embedding.providers.openai import OpenAIEmbedding
 from app.llm.factory import is_langchain_available
 from app.llm.prompts.loader import PromptLoader
 from app.llm.providers.openai import OpenAILLM
+from app.observability.metrics import get_metrics
+from app.policy import PolicyEngine
 from app.reranker.providers.http import HttpReranker
 from app.retrieval.context.builder import ContextBuilder
 from app.retrieval.evidence import EvidenceChecker
 from app.retrieval.hybrid import HybridRetriever
 from app.retrieval.rerank import RerankService
 from app.services.conversation_service import ConversationService
-from app.services.wiki_service import WikiService
 from app.services.ingestion_service import IngestionService
 from app.services.knowledge_base_service import KnowledgeBaseService
 from app.services.query_service import QueryService
 from app.services.queue import EventQueue, IngestionQueue
+from app.services.wiki_service import WikiService
 from app.storage.keyword.store import PostgresKeywordStore
 from app.storage.postgres.db import dispose_engine, get_session_factory, init_engine
 from app.storage.qdrant.store import QdrantVectorStore
-from app.observability.metrics import get_metrics
-from app.policy import PolicyEngine
 
 logger = logging.getLogger(__name__)
 

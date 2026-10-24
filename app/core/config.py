@@ -17,7 +17,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _BLOCKED_HOSTS = frozenset({"localhost", "metadata.google.internal", "metadata", "instance-data"})
 
 
-def _parse_ip_literal(host: str) -> "ipaddress.IPv4Address | ipaddress.IPv6Address | None":
+def _parse_ip_literal(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
     """Parse an IP literal, tolerating the decimal/hex/octal forms that a naive
     string-prefix check would miss (e.g. ``2130706433``, ``0x7f000001``,
     ``0177.0.0.1``). Returns None for ordinary hostnames."""

@@ -43,7 +43,7 @@ async def invoke_spec_handler(spec: Any, arguments: dict[str, Any]) -> str:
         return await spec.handler(**kwargs)
     except TypeError:
         return f"{ERROR_PREFIX} 参数不合规，允许的参数为 {sorted(allowed)}。"
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("tool %s raised", spec.name, exc_info=True)
         return f"{ERROR_PREFIX} {type(exc).__name__}"
 
@@ -137,7 +137,7 @@ def make_guarded_handler(
 class SimpleNamespaceLike:
     """闸口所需的 spec 最小协议（name/parameters/risk_level/requires_approval/handler）。"""
 
-    __slots__ = ("name", "parameters", "risk_level", "requires_approval", "handler")
+    __slots__ = ("handler", "name", "parameters", "requires_approval", "risk_level")
 
     def __init__(self, **kwargs: Any) -> None:
         for key, value in kwargs.items():

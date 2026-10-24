@@ -8,6 +8,7 @@ import sqlalchemy as sa
 
 from app.core.ids import parse_uuid
 
+
 def _apply_cursor(
     stmt,
     model,

@@ -16,16 +16,14 @@ import pytest
 from app.api.pagination import decode_cursor, encode_cursor, next_cursor
 from app.core.config import _is_private_host
 from app.core.errors import AppError
-from app.core.ids import parse_uuid
+
+# ---------- assert_same_kb ----------
+from app.core.ids import assert_same_kb, parse_uuid
 from app.domain.ingestion import BlockType
 from app.ingestion.parsers import parser_for
 from app.ingestion.parsers.html import HtmlParser
 from app.ingestion.parsers.markdown import MarkdownParser
 from app.ingestion.parsers.pdf import PdfParser
-
-# ---------- assert_same_kb ----------
-
-from app.core.ids import assert_same_kb
 
 _KB = "11111111-1111-1111-1111-111111111111"
 _OTHER = "22222222-2222-2222-2222-222222222222"

@@ -7,11 +7,14 @@
   上传元数据的冲突解决在 app/ingestion/metadata.py 中进行，而非在此处。
 """
 
+import logging
 import re
 
 from app.core.errors import IngestionError, IngestionErrorCode
 from app.core.versions import PARSER_VERSION
 from app.domain.ingestion import ASTBlock, BlockType, DocumentAST
+
+logger = logging.getLogger(__name__)
 
 try:
     import yaml
@@ -52,8 +55,7 @@ class MarkdownParser:
             ) from exc
         # A leading UTF-8 BOM would otherwise make the first line "\ufeff---",
         # which never equals "---", silently disabling front-matter detection.
-        if text.startswith("\ufeff"):
-            text = text[1:]
+        text = text.removeprefix("\ufeff")
         if not text.strip():
             raise IngestionError(IngestionErrorCode.FILE_EMPTY, "empty document", "PARSE")
 
@@ -94,7 +96,9 @@ def _parse_front_matter(lines: list[str]) -> dict:
                 return {str(key): value for key, value in parsed.items() if value is not None}
             return {}
         except Exception:
-            pass  # malformed YAML: keep the forgiving fallback below
+            # 刻意降级：畸形 front matter 不应让整个入库失败。但留一条
+            # debug 日志，避免系统性的 YAML 问题被完全吞掉、无从排查。
+            logger.debug("front matter YAML parse failed; using simple fallback", exc_info=True)
     return _parse_front_matter_simple(lines)
 
 
